@@ -153,21 +153,21 @@ exports.createOrder = async (req, res) => {
     const { patientId, addressId, prescriptionId, items, pharmacistReview, unmatchedMedicines, totalAmount } = req.body;
 
     // ✅ VALIDATE PATIENT ID
-if (!patientId) {
-  return res.status(400).json({
-    success: false,
-    message: "patientId is required",
-  });
-}
+    if (!patientId) {
+      return res.status(400).json({
+        success: false,
+        message: "patientId is required",
+      });
+    }
 
-const patient = await PatientDetails.findById(patientId);
+    const patient = await PatientDetails.findById(patientId);
 
-if (!patient) {
-  return res.status(404).json({
-    success: false,
-    message: "Patient not found",
-  });
-}
+    if (!patient) {
+      return res.status(404).json({
+        success: false,
+        message: "Patient not found",
+      });
+    }
 
     // ✅ VALIDATE ITEMS - allow empty if pharmacistReview is true
     if ((!items || !Array.isArray(items) || items.length === 0) && !pharmacistReview) {
@@ -250,30 +250,30 @@ if (!patient) {
     }
 
     // ✅ GET ADDRESS
- let address = null;
+    let address = null;
 
-// ✅ 1. If addressId provided
-if (addressId) {
-  address = await Address.findById(addressId);
-}
+    // ✅ 1. If addressId provided
+    if (addressId) {
+      address = await Address.findById(addressId);
+    }
 
-// ✅ 2. If not → try patient address
-if (!address && patient.addressId) {
-  address = await Address.findById(patient.addressId);
-}
+    // ✅ 2. If not → try patient address
+    if (!address && patient.addressId) {
+      address = await Address.findById(patient.addressId);
+    }
 
-// ✅ 3. If not → fallback default
-if (!address) {
-  address = await Address.findOne({ userId, isDefault: true });
-}
+    // ✅ 3. If not → fallback default
+    if (!address) {
+      address = await Address.findOne({ userId, isDefault: true });
+    }
 
-// ❌ Final validation
-if (!address) {
-  return res.status(400).json({
-    success: false,
-    message: "No address found for this patient"
-  });
-}
+    // ❌ Final validation
+    if (!address) {
+      return res.status(400).json({
+        success: false,
+        message: "No address found for this patient"
+      });
+    }
 
     // ✅ CREATE ORDER
     const orderData = {
@@ -323,7 +323,7 @@ if (!address) {
     // Add pharmacist review flag if present
     if (pharmacistReview) {
       orderData.pharmacistReview = true;
-      orderData.orderStatus = "PendingPharmacistReview";
+      orderData.orderStatus = "Created";
     }
 
     // Add unmatched medicines if present
@@ -484,10 +484,10 @@ exports.getOrders = async (req, res) => {
           filter === "active"
             ? { expiry: { $gt: next7 } }
             : filter === "expiring"
-            ? { expiry: { $gt: now, $lte: next7 } }
-            : filter === "expired"
-            ? { expiry: { $lte: now } }
-            : {},
+              ? { expiry: { $gt: now, $lte: next7 } }
+              : filter === "expired"
+                ? { expiry: { $lte: now } }
+                : {},
       })
       .sort({ createdAt: -1 });
 
@@ -609,7 +609,7 @@ exports.markPaymentPaid = async (req, res) => {
       });
     }
 
-  
+
 
     // ✅ Update payment
     order.paymentStatus = "Paid";
@@ -639,23 +639,23 @@ exports.createAdminOrder = async (req, res) => {
   try {
     const { patientId, doctor, items, address, discount = 0, notes } = req.body;
 
-     
 
-if (!patientId) {
-  return res.status(400).json({
-    success: false,
-    message: "patientId is required",
-  });
-}
 
-const patient = await PatientDetails.findById(patientId);
+    if (!patientId) {
+      return res.status(400).json({
+        success: false,
+        message: "patientId is required",
+      });
+    }
 
-if (!patient) {
-  return res.status(404).json({
-    success: false,
-    message: "Patient not found",
-  });
-}
+    const patient = await PatientDetails.findById(patientId);
+
+    if (!patient) {
+      return res.status(404).json({
+        success: false,
+        message: "Patient not found",
+      });
+    }
     if (!items || !Array.isArray(items) || items.length === 0)
       return res.status(400).json({ success: false, message: "items array is required" });
     if (!address || !address.fullAddress)
@@ -673,37 +673,37 @@ if (!patient) {
     const medMap = {};
     medicines.forEach((m) => { medMap[m._id.toString()] = m; });
 
-  
-      // 🔥 ADD THIS HERE 👇 (REPLACE OLD LOOP)
 
-      // Merge quantities of same medicine
-      const mergedItems = {};
+    // 🔥 ADD THIS HERE 👇 (REPLACE OLD LOOP)
 
-      items.forEach(item => {
-        const id = item.medicineId.toString();
-        if (!mergedItems[id]) mergedItems[id] = 0;
-        mergedItems[id] += item.qty;
-      });
+    // Merge quantities of same medicine
+    const mergedItems = {};
 
-      // Validate stock
-      for (const id in mergedItems) {
-        const med = medMap[id];
+    items.forEach(item => {
+      const id = item.medicineId.toString();
+      if (!mergedItems[id]) mergedItems[id] = 0;
+      mergedItems[id] += item.qty;
+    });
 
-        if (!med) {
-          return res.status(404).json({
-            success: false,
-            message: "Medicine not found",
-          });
-        }
+    // Validate stock
+    for (const id in mergedItems) {
+      const med = medMap[id];
 
-        if (med.stock < mergedItems[id]) {
-          return res.status(400).json({
-            success: false,
-            message: `${med.name} only has ${med.stock} in stock`,
-          });
-        }
+      if (!med) {
+        return res.status(404).json({
+          success: false,
+          message: "Medicine not found",
+        });
       }
-        
+
+      if (med.stock < mergedItems[id]) {
+        return res.status(400).json({
+          success: false,
+          message: `${med.name} only has ${med.stock} in stock`,
+        });
+      }
+    }
+
 
     // Build prescription meds & totals
     let subtotal = 0;
@@ -749,7 +749,7 @@ if (!patient) {
       userId: patient.userId,
       prescription: prescription._id,
       patient: patient._id,
-orderSource: "admin",
+      orderSource: "admin",
       totalAmount: total,
       patientDetails: {
         name: patient.name,
@@ -769,21 +769,21 @@ orderSource: "admin",
       orderStatus: "Processing",
     });
 
-// 🔥 DEDUCT STOCK (ADD THIS)
-await Medicine.bulkWrite(
-  Object.entries(mergedItems).map(([id, qty]) => ({
-    updateOne: {
-      filter: { _id: id },
-      update: {
-        $inc: {
-          stock: -qty,
-          demand30: qty,
-          demand90: qty,
+    // 🔥 DEDUCT STOCK (ADD THIS)
+    await Medicine.bulkWrite(
+      Object.entries(mergedItems).map(([id, qty]) => ({
+        updateOne: {
+          filter: { _id: id },
+          update: {
+            $inc: {
+              stock: -qty,
+              demand30: qty,
+              demand90: qty,
+            },
+          },
         },
-      },
-    },
-  }))
-);
+      }))
+    );
 
     const populated = await Order.findById(order._id).populate({
       path: "prescription",

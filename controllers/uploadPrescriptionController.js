@@ -207,7 +207,7 @@
       console.log(`Final matched: ${matchedMeds.length} raw → ${validMeds.length} valid`, validMeds.map(m => `${m.name} ${m.freqLabel} ${m.duration}d qty:${m.qty} ₹${m.subtotal}`));
 
       const subtotal = validMeds.reduce((sum, m) => sum + m.subtotal, 0);
-      const gst = subtotal * 0.12;
+      const gst = Math.round(subtotal * 0.05 * 100) / 100;
       const total = subtotal + gst;
 
       
@@ -312,7 +312,7 @@
       console.log(`PDF matched ${matchedMeds.length} medicines`);
 
       const subtotal = matchedMeds.reduce((sum, m) => sum + m.subtotal, 0);
-      const gst = subtotal * 0.12;
+      const gst = Math.round(subtotal * 0.05 * 100) / 100;
       const total = subtotal + gst;
 
       // Clean up
