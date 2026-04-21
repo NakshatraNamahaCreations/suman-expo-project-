@@ -235,7 +235,7 @@ if (!patient) {
       const gst = items.reduce((sum, item) => {
         const med = medMap[item.medicineId.toString()];
         const price = Number(med.sellingPrice || 0);
-        const pct = med.gstPct || 12;
+        const pct = med.gstPct || 5;
         return sum + (item.qty * price * pct) / 100;
       }, 0);
 
@@ -708,7 +708,7 @@ if (!patient) {
       return { medicine: med._id, duration, freq, qty, price, subtotal: itemSub };
     });
 
-    const avgGstPct = medicines.reduce((sum, m) => sum + (m.gstPct || 12), 0) / medicines.length;
+    const avgGstPct = medicines.reduce((sum, m) => sum + (m.gstPct || 5), 0) / medicines.length;
     const gst = Math.round(subtotal * (avgGstPct / 100) * 100) / 100;
     const total = Math.round((subtotal + gst - discount) * 100) / 100;
 
