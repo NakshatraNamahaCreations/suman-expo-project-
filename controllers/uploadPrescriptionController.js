@@ -202,8 +202,8 @@
         }
       }
 
-      // Only keep medicines that matched a DB entry (have a price) or look like real medicine names
-      const validMeds = matchedMeds.filter(m => m.medicineId || m.price > 0);
+      // Only keep medicines that matched database (have a medicineId)
+      const validMeds = matchedMeds.filter(m => m.medicineId);
       console.log(`Final matched: ${matchedMeds.length} raw → ${validMeds.length} valid`, validMeds.map(m => `${m.name} ${m.freqLabel} ${m.duration}d qty:${m.qty} ₹${m.subtotal}`));
 
       const subtotal = validMeds.reduce((sum, m) => sum + m.subtotal, 0);
