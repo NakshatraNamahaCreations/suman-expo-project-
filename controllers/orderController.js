@@ -150,7 +150,7 @@ function paginate(query) {
 
 exports.createOrder = async (req, res) => {
   try {
-    const { patientId, addressId, prescriptionId, items, pharmacistReview, unmatchedMedicines, totalAmount } = req.body;
+    const { patientId, addressId, prescriptionId, items, pharmacistReview, unmatchedMedicines, totalAmount, userId: requestUserId } = req.body;
 
     // ✅ VALIDATE PATIENT ID
     if (!patientId) {
@@ -189,7 +189,8 @@ exports.createOrder = async (req, res) => {
       }
     }
 
-    const userId = patient.userId;
+    // ✅ Use userId from request body if provided, otherwise get from patient
+    const userId = requestUserId || patient.userId;
 
     let medMap = {};
     let serverSubtotal = 0;
@@ -448,11 +449,16 @@ exports.getBillingTable = async (req, res) => {
 exports.getOrders = async (req, res) => {
   try {
     const { page, limit, skip, all } = paginate(req.query);
-    const { search, orderStatus, paymentStatus, from, to, filter } = req.query;
+    const { search, orderStatus, paymentStatus, from, to, filter, userId } = req.query;
 
     const queryFilter = {
       isDeleted: { $ne: true } // ✅ prevent deleted data
     };
+
+    // ✅ Filter by userId if provided
+    if (userId) {
+      queryFilter.userId = userId;
+    }
 
     if (orderStatus) queryFilter.orderStatus = orderStatus;
     if (paymentStatus) queryFilter.paymentStatus = paymentStatus;

@@ -15,6 +15,7 @@
     const dashboardRoutes = require("./routes/dashboardRoutes");
     const orderRoutes = require("./routes/orderRoutes");
     const authRoutes = require("./routes/authRoutes");
+    const authLoginRoutes = require("./routes/authLoginRoutes");
 
     const uploadRoutes = require("./routes/uploadRoutes");
     const ticketRoutes = require("./routes/ticketRoutes");
@@ -73,6 +74,7 @@
     app.use("/api/patient-details", patientDetailsRoutes);
     app.use("/api/otp", otpRoutes);
     app.use("/api/auth", authRoutes);
+    app.use("/api/auth-login", authLoginRoutes);
     app.use("/api/upload", uploadRoutes);
     app.use("/api/tickets", ticketRoutes);
 

@@ -20,6 +20,8 @@ function authMiddleware(req, res, next) {
     "/api/otp/verify",
     "/api/auth/login",
     "/api/auth/register",
+    "/api/auth-login/send-otp",
+    "/api/auth-login/verify-otp",
   ];
 
   if (publicPaths.some((p) => req.path.startsWith(p))) {
