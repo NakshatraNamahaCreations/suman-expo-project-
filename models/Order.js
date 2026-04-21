@@ -64,7 +64,6 @@ const orderSchema = new mongoose.Schema(
         medicineId: {
           type: mongoose.Schema.Types.ObjectId,
           ref: "Medicine",
-          required: true,
         },
 
         name: {
@@ -105,6 +104,23 @@ const orderSchema = new mongoose.Schema(
       },
     ],
 
+    // 🔥 UNMATCHED MEDICINES (for pharmacist review)
+    unmatchedMedicines: [
+      {
+        name: String,
+        dosage: String,
+        duration: Number,
+        qty: Number,
+        unit: String,
+      },
+    ],
+
+    // 🔥 PHARMACIST REVIEW FLAG
+    pharmacistReview: {
+      type: Boolean,
+      default: false,
+    },
+
     // 🔥 RAZORPAY DETAILS
     razorpayOrderId: {
       type: String,
@@ -133,7 +149,7 @@ const orderSchema = new mongoose.Schema(
     // 🔥 ORDER STATUS
     orderStatus: {
       type: String,
-      enum: ["Created", "Processing", "Packed", "Shipped", "Delivered"],
+      enum: ["Created", "Processing", "Packed", "Shipped", "Delivered", "PendingPharmacistReview"],
       default: "Created",
       index: true,
     },

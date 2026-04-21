@@ -150,7 +150,7 @@ function paginate(query) {
 
 exports.createOrder = async (req, res) => {
   try {
-    const { patientId, addressId, prescriptionId, items } = req.body;
+    const { patientId, addressId, prescriptionId, items, pharmacistReview, unmatchedMedicines, totalAmount } = req.body;
 
     // ✅ VALIDATE PATIENT ID
 if (!patientId) {
@@ -169,72 +169,78 @@ if (!patient) {
   });
 }
 
-    // ✅ VALIDATE ITEMS
-    if (!items || !Array.isArray(items) || items.length === 0) {
+    // ✅ VALIDATE ITEMS - allow empty if pharmacistReview is true
+    if ((!items || !Array.isArray(items) || items.length === 0) && !pharmacistReview) {
       return res.status(400).json({
         success: false,
         message: "No medicines provided",
       });
     }
 
-    // ✅ VALIDATE medicineId
-    for (const m of items) {
-      if (!m.medicineId) {
-        return res.status(400).json({
-          success: false,
-          message: "medicineId missing in items",
-        });
+    // ✅ VALIDATE medicineId (skip if pharmacistReview)
+    if (!pharmacistReview) {
+      for (const m of items) {
+        if (!m.medicineId) {
+          return res.status(400).json({
+            success: false,
+            message: "medicineId missing in items",
+          });
+        }
       }
     }
 
     const userId = patient.userId;
 
-    // 🔥 FETCH MEDICINES
-    const medicineIds = items.map(i => i.medicineId);
+    let medMap = {};
+    let serverTotal = totalAmount || 0;
 
-    const medicines = await Medicine.find({
-      _id: { $in: medicineIds }
-    });
+    // 🔥 FETCH MEDICINES (skip if pharmacistReview with no items)
+    if (items && items.length > 0) {
+      const medicineIds = items.map(i => i.medicineId);
 
-    const medMap = {};
-    medicines.forEach(m => {
-      medMap[m._id.toString()] = m;
-    });
+      const medicines = await Medicine.find({
+        _id: { $in: medicineIds }
+      });
 
-    // ✅ VALIDATE STOCK + EXISTENCE
-    for (const item of items) {
-      const med = medMap[item.medicineId.toString()];
+      medicines.forEach(m => {
+        medMap[m._id.toString()] = m;
+      });
 
-      if (!med) {
-        return res.status(404).json({
-          success: false,
-          message: "Medicine not found",
-        });
+      // ✅ VALIDATE STOCK + EXISTENCE
+      for (const item of items) {
+        const med = medMap[item.medicineId.toString()];
+
+        if (!med) {
+          return res.status(404).json({
+            success: false,
+            message: "Medicine not found",
+          });
+        }
+
+        if (med.stock < item.qty) {
+          return res.status(400).json({
+            success: false,
+            message: `${med.name} only has ${med.stock} in stock`,
+          });
+        }
       }
 
-      if (med.stock < item.qty) {
-        return res.status(400).json({
-          success: false,
-          message: `${med.name} only has ${med.stock} in stock`,
-        });
-      }
+      // 🔥 CALCULATE TOTAL
+      const subtotal = items.reduce((sum, item) => {
+        const med = medMap[item.medicineId.toString()];
+        const price = Number(med.sellingPrice || 0);
+        return sum + item.qty * price;
+      }, 0);
+
+      const gst = items.reduce((sum, item) => {
+        const med = medMap[item.medicineId.toString()];
+        const price = Number(med.sellingPrice || 0);
+        const pct = med.gstPct || 12;
+        return sum + (item.qty * price * pct) / 100;
+      }, 0);
+
+      serverTotal = Math.round((subtotal + gst) * 100) / 100;
     }
-
-    // 🔥 CALCULATE TOTAL
-    const subtotal = items.reduce((sum, item) => {
-      const med = medMap[item.medicineId.toString()];
-      const price = Number(med.sellingPrice || 0);
-      return sum + item.qty * price;
-    }, 0);
-
-    const gst = items.reduce((sum, item) => {
-      const med = medMap[item.medicineId.toString()];
-      const price = Number(med.sellingPrice || 0);
-      const pct = med.gstPct || 12;
-      return sum + (item.qty * price * pct) / 100;
-    }, 0);
-
-    const serverTotal = Math.round((subtotal + gst) * 100) / 100;
 
     // ✅ GET ADDRESS
  let address = null;
@@ -263,14 +269,13 @@ if (!address) {
 }
 
     // ✅ CREATE ORDER
-    const order = await Order.create({
+    const orderData = {
       userId,
       prescription: prescriptionId,
       patient: patient._id,
       orderSource: "mobile",
       totalAmount: serverTotal,
-
-      items: items.map((item) => {
+      items: (items || []).map((item) => {
         const med = medMap[item.medicineId.toString()];
         const price = Number(med.sellingPrice || 0);
 
@@ -303,23 +308,38 @@ if (!address) {
       },
 
       deliveryAddress: address.fullAddress,
-    });
+    };
 
-    // ✅ 🔥 DEDUCT STOCK (FIXED POSITION + SYNTAX)
-    await Medicine.bulkWrite(
-      items.map((item) => ({
-        updateOne: {
-          filter: { _id: item.medicineId },
-          update: {
-            $inc: {
-              stock: -item.qty,
-              demand30: item.qty,
-              demand90: item.qty,
+    // Add pharmacist review flag if present
+    if (pharmacistReview) {
+      orderData.pharmacistReview = true;
+      orderData.orderStatus = "PendingPharmacistReview";
+    }
+
+    // Add unmatched medicines if present
+    if (unmatchedMedicines && unmatchedMedicines.length > 0) {
+      orderData.unmatchedMedicines = unmatchedMedicines;
+    }
+
+    const order = await Order.create(orderData);
+
+    // ✅ 🔥 DEDUCT STOCK (only if items exist)
+    if (items && items.length > 0) {
+      await Medicine.bulkWrite(
+        items.map((item) => ({
+          updateOne: {
+            filter: { _id: item.medicineId },
+            update: {
+              $inc: {
+                stock: -item.qty,
+                demand30: item.qty,
+                demand90: item.qty,
+              },
             },
           },
-        },
-      }))
-    );
+        }))
+      );
+    }
 
     // ✅ RESPONSE
     return res.status(201).json({
