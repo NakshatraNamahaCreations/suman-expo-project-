@@ -53,6 +53,21 @@ const orderSchema = new mongoose.Schema(
       pincode: String,
     },
 
+    subtotal: {
+      type: Number,
+      default: 0,
+    },
+
+    deliveryFee: {
+      type: Number,
+      default: 0,
+    },
+
+    gst: {
+      type: Number,
+      default: 0,
+    },
+
     totalAmount: {
       type: Number,
       required: true,

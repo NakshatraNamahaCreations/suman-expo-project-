@@ -192,6 +192,9 @@ if (!patient) {
     const userId = patient.userId;
 
     let medMap = {};
+    let serverSubtotal = 0;
+    let serverGst = 0;
+    let serverDeliveryFee = 0;
     let serverTotal = totalAmount || 0;
 
     // 🔥 FETCH MEDICINES (skip if pharmacistReview with no items)
@@ -226,20 +229,24 @@ if (!patient) {
       }
 
       // 🔥 CALCULATE TOTAL
-      const subtotal = items.reduce((sum, item) => {
+      serverSubtotal = items.reduce((sum, item) => {
         const med = medMap[item.medicineId.toString()];
         const price = Number(med.sellingPrice || 0);
         return sum + item.qty * price;
       }, 0);
 
-      const gst = items.reduce((sum, item) => {
+      serverGst = items.reduce((sum, item) => {
         const med = medMap[item.medicineId.toString()];
         const price = Number(med.sellingPrice || 0);
         const pct = med.gstPct || 5;
         return sum + (item.qty * price * pct) / 100;
       }, 0);
+      serverGst = Math.round(serverGst * 100) / 100;
 
-      serverTotal = Math.round((subtotal + gst) * 100) / 100;
+      // 🔥 CALCULATE DELIVERY FEE (₹50 if subtotal < ₹499, else free)
+      serverDeliveryFee = serverSubtotal >= 499 ? 0 : 50;
+
+      serverTotal = Math.round((serverSubtotal + serverGst + serverDeliveryFee) * 100) / 100;
     }
 
     // ✅ GET ADDRESS
@@ -274,6 +281,9 @@ if (!address) {
       prescription: prescriptionId,
       patient: patient._id,
       orderSource: "mobile",
+      subtotal: serverSubtotal,
+      deliveryFee: serverDeliveryFee,
+      gst: serverGst,
       totalAmount: serverTotal,
       items: (items || []).map((item) => {
         const med = medMap[item.medicineId.toString()];
