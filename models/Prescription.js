@@ -15,6 +15,8 @@ const medSchema = new mongoose.Schema({
   qty: Number,
   price: Number,
   subtotal: Number,
+  unit: String,
+  doseAmount: { type: Number, default: 1 },
 });
 
 const prescriptionSchema = new mongoose.Schema(

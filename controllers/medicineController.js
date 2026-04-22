@@ -63,14 +63,15 @@ const existing = await Medicine.findOne({
       
     // ✅ CATEGORY-BASED UNIT VALIDATION
       const categoryUnitMap = {
-        Liquid: ["ML"],
-        Powder: ["Grams"],
-        Tablet: ["Tablet", "Strip"],
-        Capsule: ["Capsule"],
-        Syrup: ["ML"],
-        Injection: ["ML"],
-        Ointment: ["Grams"],
-        Device: ["Unit"]
+        Tablet: ["tablets", "capsules"],
+        Capsule: ["capsules", "tablets"],
+        Syrup: ["ml"],
+        Liquid: ["ml", "litre"],
+        Injection: ["ml"],
+        Ointment: ["grams"],
+        Dressing: ["sheets"],
+        Device: ["pieces"],
+        "Medical Device": ["pieces"]
       };
 
       const category = r.category || "Tablet";
@@ -187,14 +188,15 @@ exports.createMedicine = async (req, res) => {
 
     // ✅ CATEGORY-UNIT VALIDATION
     const categoryUnitMap = {
-      Liquid: ["ML"],
-      Powder: ["Grams"],
-      Tablet: ["Tablet", "Strip"],
-      Capsule: ["Capsule"],
-      Syrup: ["ML"],
-      Injection: ["ML"],
-      Ointment: ["Grams"],
-      Device: ["Unit"]
+      Tablet: ["tablets", "capsules"],
+      Capsule: ["capsules", "tablets"],
+      Syrup: ["ml"],
+      Liquid: ["ml", "litre"],
+      Injection: ["ml"],
+      Ointment: ["grams"],
+      Dressing: ["sheets"],
+      Device: ["pieces"],
+      "Medical Device": ["pieces"]
     };
 
     const { category, unit } = data;
@@ -296,14 +298,15 @@ exports.updateMedicine = async (req, res) => {
 
     // ✅ ADD SAME VALIDATION
     const categoryUnitMap = {
-      Liquid: ["ML"],
-      Powder: ["Grams"],
-      Tablet: ["Tablet", "Strip"],
-      Capsule: ["Capsule"],
-      Syrup: ["ML"],
-      Injection: ["ML"],
-      Ointment: ["Grams"],
-      Device: ["Unit"]
+      Tablet: ["tablets", "capsules"],
+      Capsule: ["capsules", "tablets"],
+      Syrup: ["ml"],
+      Liquid: ["ml", "litre"],
+      Injection: ["ml"],
+      Ointment: ["grams"],
+      Dressing: ["sheets"],
+      Device: ["pieces"],
+      "Medical Device": ["pieces"]
     };
 
     const { category, unit } = req.body;

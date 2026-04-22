@@ -34,12 +34,13 @@
 
       const freq = m.freq || { m: 0, a: 0, n: 0 };
       const daily = (freq.m || 0) + (freq.a || 0) + (freq.n || 0);
-      const qty = m.qty ?? daily * (m.duration || 1);
+      const doseAmount = medDoc.doseAmount || 1;
+      const qty = m.qty ?? daily * (m.duration || 1) * doseAmount;
 
       if (checkStock && medDoc.stock < qty)
         throw `Insufficient stock for ${medDoc.name}. Available: ${medDoc.stock}, Required: ${qty}`;
 
-      const price = medDoc.price || 0;
+      const price = medDoc.sellingPrice || 0;
       const sub = qty * price;
       subtotal += sub;
       maxDuration = Math.max(maxDuration, m.duration || 1);
@@ -51,6 +52,8 @@
         qty,
         price,
         subtotal: sub,
+        unit: medDoc.unit,
+        doseAmount,
       });
     }
 

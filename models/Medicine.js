@@ -15,7 +15,13 @@ const medicineSchema = new mongoose.Schema(
 
 unit: {
   type: String,
-  required: true
+  required: true,
+  enum: ["ml", "litre", "tablets", "sheets", "pieces", "capsules", "grams"]
+},
+
+doseAmount: {
+  type: Number,
+  default: 1
 },
 
 normalizedName: {
@@ -132,6 +138,10 @@ medicineSchema.virtual("daysUntilStockout").get(function(){
 
   return Math.floor(this.stock / dailyUsage);
 
+});
+
+medicineSchema.virtual("price").get(function(){
+  return this.sellingPrice;
 });
 
 medicineSchema.pre("save", function () {
