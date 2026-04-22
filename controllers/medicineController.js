@@ -23,23 +23,77 @@ exports.uploadMedicinesExcel = async (req, res) => {
       return res.status(400).json({ message: "Excel file required" });
     }
 
-    const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const data = XLSX.utils.sheet_to_json(sheet);
+    const workbook = XLSX.read(req.file.buffer, { type: "buffer", defval: "" });
+
+    // Try to find the sheet with data (skip Instructions, Settings, etc.)
+    let sheet = null;
+    let sheetName = null;
+
+    for (let i = 0; i < workbook.SheetNames.length; i++) {
+      const name = workbook.SheetNames[i];
+      if (name.toLowerCase().includes('instruction') || name.toLowerCase().includes('guide')) {
+        continue;
+      }
+
+      const testSheet = workbook.Sheets[name];
+      const testData = XLSX.utils.sheet_to_json(testSheet, { defval: "" });
+
+      // Use first sheet with actual data rows
+      if (testData.length > 1) { // At least 1 data row (excluding header)
+        sheet = testSheet;
+        sheetName = name;
+        break;
+      }
+    }
+
+    if (!sheet) {
+      return res.status(400).json({ message: "No data found in Excel file. Please check the 'Medicines' sheet has data rows." });
+    }
+
+    // Parse with header row in row 1, data starting from row 2
+    const data = XLSX.utils.sheet_to_json(sheet, {
+      defval: "",
+      blankrows: false
+    });
+
+    // Debug: Log detected columns and data
+    console.log("📋 Sheet name:", sheetName);
+    console.log("📋 Detected columns:", data.length > 0 ? Object.keys(data[0]) : "No data");
+    console.log("📊 Total data rows found:", data.length);
+
+    if (data.length === 0) {
+      return res.status(400).json({ message: "No data rows found. Ensure row 2 onwards contains medicine data." });
+    }
 
     // ✅ CLEAN FUNCTION (remove spaces, tabs, multiple spaces)
-    const clean = (val) =>
-      typeof val === "string"
-        ? val.replace(/\s+/g, " ").trim()
-        : val;
+    const clean = (val) => {
+      if (val === null || val === undefined) return "";
+      return String(val).replace(/\s+/g, " ").trim();
+    };
 
     // ✅ CLEAN WHOLE ROW (VERY IMPORTANT)
     const cleanRow = (row) => {
       const cleaned = {};
       for (let key in row) {
-        cleaned[key] = clean(row[key]);
+        cleaned[clean(key)] = clean(row[key]);
       }
       return cleaned;
+    };
+
+    // ✅ HELPER: Find value by multiple possible column names (case-insensitive)
+    const findField = (row, ...possibleNames) => {
+      const lowerRow = {};
+      for (let key in row) {
+        lowerRow[key.toLowerCase()] = row[key];
+      }
+
+      for (let name of possibleNames) {
+        const lowerName = name.toLowerCase();
+        if (lowerRow[lowerName] !== undefined && lowerRow[lowerName] !== null && lowerRow[lowerName] !== '') {
+          return lowerRow[lowerName];
+        }
+      }
+      return null;
     };
 
     let parsedData = [];
@@ -48,48 +102,61 @@ exports.uploadMedicinesExcel = async (req, res) => {
       // ✅ CLEAN ENTIRE ROW
       const r = cleanRow(row);
 
-      const name = r.name || r.MedicineName;
-      if (!name) continue;
+      // Try multiple column names for each field
+      const name = findField(r, 'medicine name', 'name', 'product name', 'medicine_name', 'product_name');
+      if (!name) {
+        console.log("⚠️ Skipping row - no medicine name found:", r);
+        continue;
+      }
 
       const normalize = (str) =>
-        str.toLowerCase().replace(/\s+/g, " ").trim();
+        clean(str).toLowerCase();
 
       const normalizedName = normalize(name);
 
-const existing = await Medicine.findOne({
-  normalizedName
-});
+      const existing = await Medicine.findOne({
+        normalizedName
+      });
 
-      
-    // ✅ CATEGORY-BASED UNIT VALIDATION
+      // ✅ CATEGORY-BASED UNIT VALIDATION
       const categoryUnitMap = {
-        Tablet: ["tablets", "capsules"],
-        Capsule: ["capsules", "tablets"],
-        Syrup: ["ml"],
-        Liquid: ["ml", "litre"],
-        Injection: ["ml"],
-        Ointment: ["grams"],
-        Dressing: ["sheets"],
-        Device: ["pieces"],
-        "Medical Device": ["pieces"]
+        tablet: ["tablets", "capsules"],
+        capsule: ["capsules", "tablets"],
+        syrup: ["ml"],
+        liquid: ["ml", "litre"],
+        injection: ["ml"],
+        ointment: ["grams"],
+        dressing: ["sheets"],
+        device: ["pieces"],
+        "medical device": ["pieces"]
       };
 
-      const category = r.category || "Tablet";
-      const allowedUnits = categoryUnitMap[category] || ["Tablet"];
+      const categoryRaw = findField(r, 'category', 'type') || "Tablet";
+      const category = Object.keys(categoryUnitMap).find(k => k.toLowerCase() === categoryRaw.toLowerCase()) || "Tablet";
+      const allowedUnits = categoryUnitMap[category.toLowerCase()] || ["tablets"];
 
-      const unit = allowedUnits.includes(r.unit)
-        ? r.unit
+      const unitField = findField(r, 'unit', 'unit type', 'unit_type', 'measurement');
+      const unit = unitField && allowedUnits.some(u => u.toLowerCase() === unitField.toLowerCase())
+        ? unitField
         : allowedUnits[0];
+
+      const doseAmount = Number(findField(r, 'dose amount', 'doseamount', 'dose_amount', 'dose') || 1);
+      const costPrice = Number(findField(r, 'cost price', 'costprice', 'cost_price', 'cost', 'cp') || 0);
+      const sellingPrice = Number(findField(r, 'selling price', 'sellingprice', 'selling_price', 'price', 'sp') || 0);
+      const stock = Number(findField(r, 'stock', 'quantity', 'qty') || 0);
+      const minStock = Number(findField(r, 'min stock', 'minstock', 'min_stock', 'minimum stock', 'reorder point') || 10);
+      const status = findField(r, 'status') || "Active";
 
       const payload = {
         name,
-        category: r.category || "Tablet",
+        category,
         unit,
-        costPrice: Number(r.costPrice) || 0,
-        sellingPrice: Number(r.sellingPrice) || 0,
-        stock: Number(r.stock) || 0,
-        minStock: Number(r.minStock) || 10,
-        status: r.status || "Active",
+        doseAmount,
+        costPrice,
+        sellingPrice,
+        stock,
+        minStock,
+        status,
       };
 
       parsedData.push({
