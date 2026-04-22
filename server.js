@@ -19,6 +19,7 @@
 
     const uploadRoutes = require("./routes/uploadRoutes");
     const ticketRoutes = require("./routes/ticketRoutes");
+    const teamMemberRoutes = require("./routes/teamMemberRoutes");
 
 
     const helmet = require("helmet");
@@ -77,6 +78,7 @@
     app.use("/api/auth-login", authLoginRoutes);
     app.use("/api/upload", uploadRoutes);
     app.use("/api/tickets", ticketRoutes);
+    app.use("/api/team-members", teamMemberRoutes);
 
     app.get("/", (req, res) => {
       res.send("RG Medlink API Running");
