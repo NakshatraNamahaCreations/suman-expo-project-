@@ -136,9 +136,17 @@ exports.uploadMedicinesExcel = async (req, res) => {
       const allowedUnits = categoryUnitMap[category.toLowerCase()] || ["tablets"];
 
       const unitField = findField(r, 'unit', 'unit type', 'unit_type', 'measurement');
-      const unit = unitField && allowedUnits.some(u => u.toLowerCase() === unitField.toLowerCase())
-        ? unitField
-        : allowedUnits[0];
+
+      // More flexible unit matching (handle singular/plural, spaces, etc.)
+      let unit = allowedUnits[0]; // Default to first allowed unit
+      if (unitField) {
+        const normalizedField = unitField.toLowerCase().trim().replace(/s$/, ''); // Remove trailing 's' for plural
+        const matchedUnit = allowedUnits.find(u =>
+          u.toLowerCase() === unitField.toLowerCase() || // Exact match
+          u.toLowerCase().replace(/s$/, '') === normalizedField // Match without plural 's'
+        );
+        if (matchedUnit) unit = matchedUnit;
+      }
 
       const doseAmount = Number(findField(r, 'dose amount', 'doseamount', 'dose_amount', 'dose') || 1);
       const costPrice = Number(findField(r, 'cost price', 'costprice', 'cost_price', 'cost', 'cp') || 0);
