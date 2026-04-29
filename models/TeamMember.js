@@ -39,6 +39,7 @@ const teamMemberSchema = new mongoose.Schema(
         "reports",
         "tickets",
         "team-members",
+        "login-users",
       ],
     },
     status: {
