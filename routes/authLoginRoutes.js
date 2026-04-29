@@ -6,6 +6,7 @@ const {
   getUserProfile,
   updateUserName,
   logout,
+  getAllLoginUsers,
 } = require("../controllers/authLoginController");
 const { authMiddleware } = require("../middleware/auth");
 
@@ -68,5 +69,13 @@ router.put("/update-name", authMiddleware, updateUserName);
  * Response: { success: true, message: "Logged out successfully" }
  */
 router.post("/logout", authMiddleware, logout);
+
+/**
+ * GET /api/auth-login/all-users
+ * Get all login users (Admin only)
+ *
+ * Response: { success: true, data: [{ phone, name, lastLogin, ... }] }
+ */
+router.get("/all-users", getAllLoginUsers);
 
 module.exports = router;

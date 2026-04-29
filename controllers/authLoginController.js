@@ -270,3 +270,40 @@ exports.logout = async (req, res) => {
     });
   }
 };
+
+/* ════════════════════════════════════════════════════
+   GET ALL LOGIN USERS (ADMIN)
+════════════════════════════════════════════════════ */
+exports.getAllLoginUsers = async (req, res) => {
+  try {
+    const users = await LoginUser.find()
+      .select("-otp")
+      .sort({ lastLogin: -1 });
+
+    const loginUsers = users.map((user) => ({
+      _id: user._id,
+      phone: user.phone,
+      name: user.name,
+      isPhoneVerified: user.isPhoneVerified,
+      lastLogin: user.lastLogin,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+      daysAgo: user.lastLogin
+        ? Math.floor(
+            (new Date() - new Date(user.lastLogin)) / (1000 * 60 * 60 * 24)
+          )
+        : null,
+    }));
+
+    res.json({
+      success: true,
+      data: loginUsers,
+    });
+  } catch (err) {
+    console.error("Get all login users error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch login users",
+    });
+  }
+};
