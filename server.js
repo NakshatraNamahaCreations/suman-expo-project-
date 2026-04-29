@@ -47,6 +47,7 @@ app.use(
       "https://rgmedlinkadminpanel.netlify.app",
       "https://rgmedlinkadmipanel.netlify.app",
       "https://adorable-selkie-b5b2c0.netlify.app",
+      "https://bucolic-rolypoly-f7eb39.netlify.app",
       /\.rgmedlink\.com$/,
     ],
     credentials: true,
