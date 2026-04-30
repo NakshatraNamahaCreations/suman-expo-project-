@@ -40,18 +40,18 @@ exports.createPatientDetails = async (req, res) => {
     }
 
     // ✅ Prevent duplicate patient
-//     const existingPatient = await PatientDetails.findOne({
-//       primaryPhone,
-//       userId,
-//       isDeleted: false
-//     });
+    //     const existingPatient = await PatientDetails.findOne({
+    //       primaryPhone,
+    //       userId,
+    //       isDeleted: false
+    //     });
 
-// if (existingPatient) {
-//   return res.status(400).json({
-//     success: false,
-//     message: "Patient already exists with this phone"
-//   });
-// }
+    // if (existingPatient) {
+    //   return res.status(400).json({
+    //     success: false,
+    //     message: "Patient already exists with this phone"
+    //   });
+    // }
 
     // ✅ First patient auto default
     const existing = await PatientDetails.findOne({
@@ -74,28 +74,28 @@ exports.createPatientDetails = async (req, res) => {
     // =========================================
     // 🔥 CREATE ADDRESS (IF PROVIDED)
     // =========================================
-let addressDoc = null;
+    let addressDoc = null;
 
-// ✅ CREATE ADDRESS IF ADMIN SENDS IT
-if (!req.body.addressId && fullAddress) {
-  addressDoc = await Address.create({
-    userId,
-    fullAddress,
-    city,
-    state,
-    pincode,
-    isDefault: true
-  });
-}
+    // ✅ CREATE ADDRESS IF ADMIN SENDS IT
+    if (!req.body.addressId && fullAddress) {
+      addressDoc = await Address.create({
+        userId,
+        fullAddress,
+        city,
+        state,
+        pincode,
+        isDefault: true
+      });
+    }
 
     // =========================================
     // 🔥 CREATE PATIENT WITH ADDRESS LINK
     // =========================================
 
-const patientData = {
-  ...req.body,
-  addressId: req.body.addressId || (addressDoc ? addressDoc._id : undefined)
-};
+    const patientData = {
+      ...req.body,
+      addressId: req.body.addressId || (addressDoc ? addressDoc._id : undefined)
+    };
 
     const data = await PatientDetails.create(patientData);
 
@@ -273,125 +273,125 @@ const Order = require("../models/Order");
 
 exports.getAllPatientDetails = async (req, res) => {
   try {
-const data = await PatientDetails.aggregate([
-  { $match: { isDeleted: false } },
+    const data = await PatientDetails.aggregate([
+      { $match: { isDeleted: false } },
 
-  // =========================
-  // ✅ GET ORDERS
-  // =========================
-  {
-    $lookup: {
-      from: "orders",
-      localField: "_id",
-      foreignField: "patient",
-      as: "orders"
-    }
-  },
-
-  // =========================
-  // ✅ UNWIND ORDERS
-  // =========================
-  {
-    $unwind: {
-      path: "$orders",
-      preserveNullAndEmptyArrays: true
-    }
-  },
-
-  // =========================
-  // ✅ POPULATE PRESCRIPTION
-  // =========================
-  {
-    $lookup: {
-      from: "prescriptions",
-      localField: "orders.prescription",
-      foreignField: "_id",
-      as: "prescriptionData"
-    }
-  },
-  {
-    $unwind: {
-      path: "$prescriptionData",
-      preserveNullAndEmptyArrays: true
-    }
-  },
-
-  // =========================
-  // ✅ MERGE PRESCRIPTION INTO ORDER
-  // =========================
-  {
-    $addFields: {
-      "orders.prescription": "$prescriptionData"
-    }
-  },
-  {
-    $project: {
-      prescriptionData: 0
-    }
-  },
-
-  // =========================
-  // ✅ GROUP BACK ORDERS
-  // =========================
-  {
-    $group: {
-      _id: "$_id",
-      doc: { $first: "$$ROOT" },
-      orders: { $push: "$orders" }
-    }
-  },
-
-  // =========================
-  // ✅ RESTORE ROOT STRUCTURE
-  // =========================
-  {
-    $replaceRoot: {
-      newRoot: {
-        $mergeObjects: ["$doc", { orders: "$orders" }]
-      }
-    }
-  },
-
-  // =========================
-  // ✅ REMOVE NULL ORDERS (IMPORTANT)
-  // =========================
-  {
-    $addFields: {
-      orders: {
-        $filter: {
-          input: "$orders",
-          as: "o",
-          cond: { $ne: ["$$o", null] }
+      // =========================
+      // ✅ GET ORDERS
+      // =========================
+      {
+        $lookup: {
+          from: "orders",
+          localField: "_id",
+          foreignField: "patient",
+          as: "orders"
         }
+      },
+
+      // =========================
+      // ✅ UNWIND ORDERS
+      // =========================
+      {
+        $unwind: {
+          path: "$orders",
+          preserveNullAndEmptyArrays: true
+        }
+      },
+
+      // =========================
+      // ✅ POPULATE PRESCRIPTION
+      // =========================
+      {
+        $lookup: {
+          from: "prescriptions",
+          localField: "orders.prescription",
+          foreignField: "_id",
+          as: "prescriptionData"
+        }
+      },
+      {
+        $unwind: {
+          path: "$prescriptionData",
+          preserveNullAndEmptyArrays: true
+        }
+      },
+
+      // =========================
+      // ✅ MERGE PRESCRIPTION INTO ORDER
+      // =========================
+      {
+        $addFields: {
+          "orders.prescription": "$prescriptionData"
+        }
+      },
+      {
+        $project: {
+          prescriptionData: 0
+        }
+      },
+
+      // =========================
+      // ✅ GROUP BACK ORDERS
+      // =========================
+      {
+        $group: {
+          _id: "$_id",
+          doc: { $first: "$$ROOT" },
+          orders: { $push: "$orders" }
+        }
+      },
+
+      // =========================
+      // ✅ RESTORE ROOT STRUCTURE
+      // =========================
+      {
+        $replaceRoot: {
+          newRoot: {
+            $mergeObjects: ["$doc", { orders: "$orders" }]
+          }
+        }
+      },
+
+      // =========================
+      // ✅ REMOVE NULL ORDERS (IMPORTANT)
+      // =========================
+      {
+        $addFields: {
+          orders: {
+            $filter: {
+              input: "$orders",
+              as: "o",
+              cond: { $ne: ["$$o", null] }
+            }
+          }
+        }
+      },
+
+      // =========================
+      // ✅ POPULATE ADDRESS
+      // =========================
+      {
+        $lookup: {
+          from: "addresses",
+          localField: "addressId",
+          foreignField: "_id",
+          as: "address"
+        }
+      },
+      {
+        $unwind: {
+          path: "$address",
+          preserveNullAndEmptyArrays: true
+        }
+      },
+
+      // =========================
+      // ✅ SORT
+      // =========================
+      {
+        $sort: { createdAt: -1 }
       }
-    }
-  },
-
-  // =========================
-  // ✅ POPULATE ADDRESS
-  // =========================
-  {
-    $lookup: {
-      from: "addresses",
-      localField: "addressId",
-      foreignField: "_id",
-      as: "address"
-    }
-  },
-  {
-    $unwind: {
-      path: "$address",
-      preserveNullAndEmptyArrays: true
-    }
-  },
-
-  // =========================
-  // ✅ SORT
-  // =========================
-  {
-    $sort: { createdAt: -1 }
-  }
-]);
+    ]);
 
     res.json({
       success: true,
@@ -453,7 +453,7 @@ exports.getPatientStats = async (req, res) => {
       // ✅ With prescription (CORRECT FIX)
       const hasOrder = p.orders && p.orders.length > 0;
 
-if (hasOrder) withPrescriptions++;
+      if (hasOrder) withPrescriptions++;
 
     });
 
@@ -485,75 +485,108 @@ if (hasOrder) withPrescriptions++;
 // ============================
 // DELETE PATIENT
 // ============================
+// exports.deletePatientDetails = async (req, res) => {
+//   try {
+//     const patientId = req.params.id;
+
+//     // ✅ 1. FIND PATIENT FIRST
+//     const patient = await PatientDetails.findById(patientId);
+
+//     if (!patient || patient.isDeleted) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Patient not found"
+//       });
+//     }
+
+
+//     const TeamMember = require("../models/TeamMember");
+//     const isAdmin = req.user?._id && await TeamMember.exists({ _id: req.user._id });
+
+//     // Allow if admin OR patient owner
+//     if (!isAdmin && patient.userId !== req.user?.phone) {
+//       return res.status(403).json({
+//         success: false,
+//         message: "Not authorized"
+//       });
+//     }
+
+//     // ✅ 3. CHECK ORDERS
+//    const orderExists = await Order.exists({
+//   patient: patient._id,
+//   isDeleted: false   // ✅ add this line
+// });
+
+//     if (orderExists) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Cannot delete patient with orders"
+//       });
+//     }
+
+//     // ✅ 4. HANDLE DEFAULT SWITCH
+//     if (patient.isDefault) {
+//       const next = await PatientDetails.findOne({
+//         userId: patient.userId,
+//         _id: { $ne: patient._id },
+//         isDeleted: false
+//       }).sort({ createdAt: -1 });
+
+//       if (next) {
+//         next.isDefault = true;
+//         await next.save();
+//       }
+//     }
+
+//     // ✅ 5. USER DELETE (SOFT DELETE)
+//     patient.isDeleted = true;
+//     await patient.save();
+
+//     res.status(200).json({
+//       success: true,
+//       message: "Patient deleted successfully"
+//     });
+
+//   } catch (err) {
+//     console.error("DELETE ERROR:", err);
+
+//     res.status(500).json({
+//       success: false,
+//       message: "Delete failed",
+//       error: err.message
+//     });
+//   }
+// };
+
 exports.deletePatientDetails = async (req, res) => {
   try {
     const patientId = req.params.id;
 
-    // ✅ 1. FIND PATIENT FIRST
     const patient = await PatientDetails.findById(patientId);
 
     if (!patient || patient.isDeleted) {
       return res.status(404).json({
         success: false,
-        message: "Patient not found"
+        message: "Patient not found",
       });
     }
 
-    // ✅ 2. CHECK AUTHORIZATION - ALLOW ADMIN OR OWNER
-    const TeamMember = require("../models/TeamMember");
-    const isAdmin = req.user?._id && await TeamMember.exists({ _id: req.user._id });
-
-    // Allow if admin OR patient owner
-    if (!isAdmin && patient.userId !== req.user?.phone) {
-      return res.status(403).json({
-        success: false,
-        message: "Not authorized"
-      });
-    }
-
-    // ✅ 3. CHECK ORDERS
-   const orderExists = await Order.exists({
-  patient: patient._id,
-  isDeleted: false   // ✅ add this line
-});
-
-    if (orderExists) {
-      return res.status(400).json({
-        success: false,
-        message: "Cannot delete patient with orders"
-      });
-    }
-
-    // ✅ 4. HANDLE DEFAULT SWITCH
-    if (patient.isDefault) {
-      const next = await PatientDetails.findOne({
-        userId: patient.userId,
-        _id: { $ne: patient._id },
-        isDeleted: false
-      }).sort({ createdAt: -1 });
-
-      if (next) {
-        next.isDefault = true;
-        await next.save();
-      }
-    }
-
-    // ✅ 5. USER DELETE (SOFT DELETE)
+    // Soft delete patient only
     patient.isDeleted = true;
+    patient.deletedAt = new Date();
     await patient.save();
 
     res.status(200).json({
       success: true,
-      message: "Patient deleted successfully"
+      message: "Patient deleted successfully",
     });
-
   } catch (err) {
     console.error("DELETE ERROR:", err);
 
     res.status(500).json({
       success: false,
       message: "Delete failed",
-      error: err.message
+      error: err.message,
     });
   }
 };
