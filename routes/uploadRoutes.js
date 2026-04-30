@@ -27,4 +27,11 @@ router.post(
   uploadController.processImagePrescription
 );
 
+// Unified medicine extraction (PDF, Excel, Image)
+router.post(
+  "/extract-medicines",
+  upload.single("file"),
+  uploadController.extractMedicines
+);
+
 module.exports = router;
