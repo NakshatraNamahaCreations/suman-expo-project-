@@ -11,9 +11,10 @@ const {
   updateOrderStatus,
   deleteOrder,
   markPaymentPaid,
-   createRazorpayOrder,
+  createRazorpayOrder,
   verifyRazorpayPayment,
-  updatePaymentStatus
+  updatePaymentStatus,
+  reorderOrder
 } = require("../controllers/orderController");
 
 // ADMIN: CREATE ORDER DIRECTLY (patient + medicines + address in one shot)
@@ -32,6 +33,9 @@ router.get("/billing", getBillingTable);
 
 // GET ALL ORDERS
 router.get("/", getOrders);
+
+// REORDER: Create new order from existing order (before /:id to avoid shadowing)
+router.post("/:id/reorder", reorderOrder);
 
 // GET SINGLE ORDER
 router.get("/:id", getOrderById);

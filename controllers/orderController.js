@@ -882,3 +882,157 @@ exports.updatePaymentStatus = async (req, res) => {
     });
   }
 };
+
+// ════════════════════════════════════════════════════════════════
+// REORDER: Create new order from existing order
+// ════════════════════════════════════════════════════════════════
+exports.reorderOrder = async (req, res) => {
+  try {
+    console.log("🔄 Reorder request for orderId:", req.params.id);
+
+    // ── Step 1: Fetch original order ──
+    const original = await Order.findById(req.params.id).populate("patient");
+    if (!original) {
+      return res.status(404).json({ success: false, message: "Original order not found" });
+    }
+
+    console.log(`✅ Found original order: ${original.orderId}`);
+
+    // ── Step 2: Extract items from original ──
+    const items = original.items.map(item => ({
+      medicineId: item.medicineId,
+      qty: item.qty,
+      duration: item.duration || 0,
+      freq: item.freq || { m: 1, a: 0, n: 1 },
+    }));
+
+    const patientDoc = original.patient;
+    const userId = original.userId;
+
+    console.log(`📋 Reordering ${items.length} medicines`);
+
+    // ── Step 3: Fetch current medicine prices ──
+    const Medicine = require("../models/Medicine");
+    const medIds = items.map(i => i.medicineId).filter(Boolean);
+    const medicines = await Medicine.find({ _id: { $in: medIds } });
+    const medMap = new Map(medicines.map(m => [m._id.toString(), m]));
+
+    // ── Step 4: Build order items with current prices ──
+    const builtItems = [];
+    let subtotal = 0;
+
+    for (const item of items) {
+      const med = medMap.get(item.medicineId?.toString());
+      if (!med) {
+        console.warn(`⚠️  Medicine not found: ${item.medicineId}`);
+        continue;
+      }
+
+      // Check stock
+      if (med.stock < item.qty) {
+        return res.status(400).json({
+          success: false,
+          message: `${med.name} is out of stock (available: ${med.stock}, requested: ${item.qty})`,
+        });
+      }
+
+      const itemPrice = med.sellingPrice || 0;
+      const itemSubtotal = itemPrice * item.qty;
+      subtotal += itemSubtotal;
+
+      builtItems.push({
+        medicineId: med._id,
+        name: med.name,
+        qty: item.qty,
+        price: itemPrice,
+        unit: med.unit || "tablet",
+        duration: item.duration || 0,
+        freq: item.freq || { m: 1, a: 0, n: 1 },
+        subtotal: itemSubtotal,
+      });
+    }
+
+    if (builtItems.length === 0) {
+      return res.status(400).json({ success: false, message: "No valid medicines to reorder" });
+    }
+
+    // ── Step 5: Calculate pricing ──
+    const gst = Math.round(subtotal * 0.05 * 100) / 100;
+    const deliveryFee = subtotal >= 499 ? 0 : 50;
+    const totalAmount = Math.round((subtotal + gst + deliveryFee) * 100) / 100;
+
+    console.log(`💰 Subtotal: ${subtotal}, GST: ${gst}, Delivery: ${deliveryFee}, Total: ${totalAmount}`);
+
+    // ── Step 6: Resolve address ──
+    const Address = require("../models/Address");
+    let address = null;
+
+    if (patientDoc?.addressId) {
+      address = await Address.findById(patientDoc.addressId);
+    }
+    if (!address && userId) {
+      address = await Address.findOne({ userId, isDefault: true });
+    }
+    if (!address && userId) {
+      address = await Address.findOne({ userId });
+    }
+
+    const addressDetails = address
+      ? {
+          fullAddress: address.fullAddress || address.addressLine,
+          city: address.city,
+          state: address.state,
+          pincode: address.pincode,
+        }
+      : original.addressDetails;
+
+    console.log(`📍 Address resolved: ${addressDetails?.fullAddress || "default"}`);
+
+    // ── Step 7: Create new order ──
+    const newOrderData = {
+      userId,
+      patient: patientDoc?._id,
+      patientDetails: original.patientDetails,
+      addressDetails,
+      deliveryAddress: addressDetails?.fullAddress || original.addressDetails?.fullAddress,
+      prescription: original.prescription || undefined,
+      items: builtItems,
+      subtotal,
+      gst,
+      deliveryFee,
+      totalAmount,
+      orderSource: "mobile",
+      orderStatus: "Created",
+      paymentStatus: "Pending",
+      pharmacistReview: false,
+    };
+
+    const newOrder = await Order.create(newOrderData);
+    console.log(`✅ Created new order: ${newOrder.orderId} (ID: ${newOrder._id})`);
+
+    // ── Step 8: Deduct stock ──
+    if (builtItems.length > 0) {
+      const bulkOps = builtItems.map(item => ({
+        updateOne: {
+          filter: { _id: item.medicineId },
+          update: { $inc: { stock: -item.qty, demand30: item.qty } },
+        },
+      }));
+      await Medicine.bulkWrite(bulkOps);
+      console.log(`📦 Stock deducted for ${builtItems.length} medicines`);
+    }
+
+    res.json({
+      success: true,
+      message: "Reorder placed successfully",
+      order: newOrder,
+    });
+  } catch (err) {
+    console.error("❌ Reorder error:", err.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to create reorder",
+      error: err.message,
+    });
+  }
+};
