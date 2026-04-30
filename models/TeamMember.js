@@ -26,6 +26,11 @@ const teamMemberSchema = new mongoose.Schema(
       required: true,
       // Stored as plain text (user requested - no bcrypt)
     },
+    role: {
+      type: String,
+      enum: ["CA", "Executive", "Manager"],
+      default: "Executive",
+    },
     permissions: {
       type: [String],
       default: [],

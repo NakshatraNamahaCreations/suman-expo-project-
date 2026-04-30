@@ -23,7 +23,7 @@ exports.getAllTeamMembers = async (req, res) => {
 // ══════════════════════════════════════════════════════════════════
 exports.createTeamMember = async (req, res) => {
   try {
-    const { name, email, phone, password, permissions } = req.body;
+    const { name, email, phone, password, permissions, role } = req.body;
 
     // Validate required fields
     if (!name || !email || !phone || !password) {
@@ -54,6 +54,7 @@ exports.createTeamMember = async (req, res) => {
       email,
       phone,
       password, // Stored as plain text (user requested)
+      role: role || "Executive",
       permissions: permissions || [],
       status: "active",
       createdBy: req.user?._id, // If authenticated
@@ -80,7 +81,7 @@ exports.createTeamMember = async (req, res) => {
 exports.updateTeamMember = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, email, phone, password, permissions, status } = req.body;
+    const { name, email, phone, password, permissions, status, role } = req.body;
 
     const member = await TeamMember.findById(id);
     if (!member) {
@@ -114,6 +115,7 @@ exports.updateTeamMember = async (req, res) => {
     if (email) member.email = email;
     if (phone) member.phone = phone;
     if (password) member.password = password;
+    if (role) member.role = role;
     if (permissions) member.permissions = permissions;
     if (status) member.status = status;
 
@@ -209,6 +211,7 @@ exports.teamMemberLogin = async (req, res) => {
         name: member.name,
         email: member.email,
         phone: member.phone,
+        role: member.role,
         permissions: member.permissions,
         status: member.status,
       },
