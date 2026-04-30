@@ -352,11 +352,14 @@ exports.extractMedicines = async (req, res) => {
     }
 
     const { mimetype, path: filePath } = req.file;
+    console.log("📥 Extracting medicines from file:", { mimetype, filePath });
+
     let matchedMeds = [];
     let doctor = "To be verified";
     let fileType = "unknown";
 
     const dbMedicines = await Medicine.find({ status: "Active" });
+    console.log(`📚 Loaded ${dbMedicines.length} medicines from database`);
 
     // ── Helper: Match medicine names to DB ──
     const findDBMatch = (medName) => {
@@ -394,6 +397,7 @@ exports.extractMedicines = async (req, res) => {
     // ── EXCEL EXTRACTION ──
     if (mimetype.includes("spreadsheet") || mimetype.includes("excel")) {
       fileType = "excel";
+      console.log("📊 Processing as EXCEL file");
       try {
         const wb = XLSX.readFile(filePath);
         const ws = wb.Sheets[wb.SheetNames[0]];
@@ -427,9 +431,11 @@ exports.extractMedicines = async (req, res) => {
       }
     }
     // ── PDF EXTRACTION ──
-    else if (mimetype === "application/pdf") {
+    else if (mimetype.includes("pdf")) {
       fileType = "pdf";
+      console.log("📄 Processing as PDF file");
       const text = await extractTextFromPDF(filePath);
+      console.log(`📄 Extracted text length: ${text?.length || 0} characters`);
       const parsed = parsePrescriptionText(text);
       doctor = parsed.doctor || doctor;
 
@@ -456,7 +462,9 @@ exports.extractMedicines = async (req, res) => {
     // ── IMAGE EXTRACTION ──
     else if (mimetype.startsWith("image/")) {
       fileType = "image";
+      console.log("📷 Processing as IMAGE file");
       const text = await extractTextFromImage(filePath);
+      console.log(`📷 Extracted text length: ${text?.length || 0} characters`);
       const parsed = parsePrescriptionText(text);
       doctor = parsed.doctor || doctor;
 
@@ -479,13 +487,22 @@ exports.extractMedicines = async (req, res) => {
           }
         }
       }
+    } else {
+      console.warn(`⚠️  Unrecognized file type: ${mimetype}`);
+      console.log("Supported types: spreadsheet/excel, pdf, image/*");
     }
 
     // Only keep medicines that matched the database
     const validMeds = matchedMeds.filter(m => m.medicineId);
+    console.log(`✅ Found ${validMeds.length} matched medicines from ${matchedMeds.length} total medicines`);
 
     // Clean up uploaded file
-    try { fs.unlinkSync(filePath); } catch {}
+    try {
+      fs.unlinkSync(filePath);
+      console.log("🗑️  File cleaned up successfully");
+    } catch (err) {
+      console.error("Error deleting file:", err.message);
+    }
 
     const subtotal = validMeds.reduce((sum, m) => sum + m.subtotal, 0);
     const gst = Math.round(subtotal * 0.05 * 100) / 100;
