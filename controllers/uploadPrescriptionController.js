@@ -360,15 +360,34 @@ exports.extractMedicines = async (req, res) => {
 
     const dbMedicines = await Medicine.find({ status: "Active" });
     console.log(`📚 Loaded ${dbMedicines.length} medicines from database`);
+    if (dbMedicines.length > 0) {
+      console.log(`   Sample medicines: ${dbMedicines.slice(0, 10).map(m => m.name).join(", ")}${dbMedicines.length > 10 ? "..." : ""}`);
+    }
 
     // ── Helper: Match medicine names to DB ──
     const findDBMatch = (medName) => {
       const search = medName.toLowerCase().replace(/\s+/g, "");
-      if (search.length < 3) return null;
-      return dbMedicines.find((dbMed) => {
+      if (search.length < 3) {
+        console.log(`⚠️  Med name too short: "${medName}" (${search.length} chars)`);
+        return null;
+      }
+
+      const matches = dbMedicines.filter((dbMed) => {
         const dbBase = dbMed.name.toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").replace(/\s+/g, "");
-        return dbBase.includes(search) || search.includes(dbBase);
+        const isMatch = dbBase.includes(search) || search.includes(dbBase);
+        if (isMatch) {
+          console.log(`✅ Matched: "${medName}" → "${dbMed.name}" (search="${search}", dbBase="${dbBase}")`);
+        }
+        return isMatch;
       });
+
+      if (matches.length === 0) {
+        console.log(`❌ No match for: "${medName}" (search="${search}")`);
+        // Log top 5 database medicines for comparison
+        console.log(`   Available medicines (first 5): ${dbMedicines.slice(0, 5).map(m => m.name).join(", ")}`);
+      }
+
+      return matches[0] || null;
     };
 
     // ── Helper: Build matched medicine object ──
@@ -452,12 +471,18 @@ exports.extractMedicines = async (req, res) => {
       }
 
       const addedNames = new Set();
+      console.log(`\n🔍 PDF: Processing ${parsed.medicines.length} parsed medicines...`);
       for (const parsedMed of parsed.medicines) {
+        console.log(`   📋 Parsed medicine: "${parsedMed.name}" ${parsedMed.dosage || ""} ${parsedMed.freqLabel} ${parsedMed.duration}d qty:${parsedMed.qty}`);
         const dbMatch = findDBMatch(parsedMed.name);
-        if (addedNames.has((dbMatch?.name || parsedMed.name).toLowerCase())) continue;
+        if (addedNames.has((dbMatch?.name || parsedMed.name).toLowerCase())) {
+          console.log(`   ⏭️  Already added, skipping`);
+          continue;
+        }
 
         addedNames.add((dbMatch?.name || parsedMed.name).toLowerCase());
         matchedMeds.push(buildMedicineObj(parsedMed.name, dbMatch, parsedMed.freq || { m: 1, a: 0, n: 1 }, parsedMed.duration || 5));
+        console.log(`   ✅ Added to matchedMeds${dbMatch ? ` (DB ID: ${dbMatch._id})` : " (no DB match)"}`);
       }
 
       // Fallback: scan full text for more medicines
@@ -493,12 +518,18 @@ exports.extractMedicines = async (req, res) => {
       }
 
       const addedNames = new Set();
+      console.log(`\n🔍 IMAGE: Processing ${parsed.medicines.length} parsed medicines...`);
       for (const parsedMed of parsed.medicines) {
+        console.log(`   📋 Parsed medicine: "${parsedMed.name}" ${parsedMed.dosage || ""} ${parsedMed.freqLabel} ${parsedMed.duration}d qty:${parsedMed.qty}`);
         const dbMatch = findDBMatch(parsedMed.name);
-        if (addedNames.has((dbMatch?.name || parsedMed.name).toLowerCase())) continue;
+        if (addedNames.has((dbMatch?.name || parsedMed.name).toLowerCase())) {
+          console.log(`   ⏭️  Already added, skipping`);
+          continue;
+        }
 
         addedNames.add((dbMatch?.name || parsedMed.name).toLowerCase());
         matchedMeds.push(buildMedicineObj(parsedMed.name, dbMatch, parsedMed.freq || { m: 1, a: 0, n: 1 }, parsedMed.duration || 5));
+        console.log(`   ✅ Added to matchedMeds${dbMatch ? ` (DB ID: ${dbMatch._id})` : " (no DB match)"}`);
       }
 
       // Fallback: scan full text

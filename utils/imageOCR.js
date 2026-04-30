@@ -145,9 +145,10 @@ async function extractTextFromImage(filePath) {
     const bestEngine = s1 >= s2 ? 1 : 2;
 
     console.log(`Engine scores: E1=${s1}, E2=${s2}. Using Engine ${bestEngine}`);
-    console.log("=== BEST OCR TEXT ===");
-    console.log(bestText);
-    console.log("=====================");
+    console.log("=== BEST OCR TEXT (first 500 chars) ===");
+    console.log(bestText.substring(0, 500));
+    if (bestText.length > 500) console.log("... (truncated)");
+    console.log("====================================");
 
     if (targetPath !== filePath) try { fs.unlinkSync(targetPath); } catch {}
 
@@ -182,8 +183,12 @@ async function fallbackTesseract(targetPath, filePath) {
  *   2. Line-by-line parsing for structured prescriptions
  */
 function parsePrescriptionText(text) {
-  if (!text || text.length < 10) return { medicines: [], doctor: null };
+  if (!text || text.length < 10) {
+    console.log(`⚠️  Text too short for parsing: ${text?.length || 0} chars`);
+    return { medicines: [], doctor: null };
+  }
 
+  console.log(`\n📖 Parsing OCR text (${text.length} chars)...`);
   // Normalize text
   const rawText = text.replace(/\r\n/g, "\n");
 
