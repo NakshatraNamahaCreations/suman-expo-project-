@@ -13,10 +13,24 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
+// Middleware to log file uploads
+const logUpload = (req, res, next) => {
+  if (req.file) {
+    console.log(`📤 File uploaded: ${req.file.originalname}`);
+    console.log(`   Path: ${req.file.path}`);
+    console.log(`   Size: ${req.file.size} bytes`);
+    console.log(`   Mimetype: ${req.file.mimetype}`);
+  } else {
+    console.log(`⚠️  No file in request for: ${req.path}`);
+  }
+  next();
+};
+
 // PDF prescription upload
 router.post(
   "/upload-prescription",
   upload.single("file"),
+  logUpload,
   uploadController.processPDFPrescription
 );
 
@@ -24,6 +38,7 @@ router.post(
 router.post(
   "/upload-image",
   upload.single("file"),
+  logUpload,
   uploadController.processImagePrescription
 );
 
@@ -31,6 +46,7 @@ router.post(
 router.post(
   "/extract-medicines",
   upload.single("file"),
+  logUpload,
   uploadController.extractMedicines
 );
 

@@ -434,10 +434,19 @@ exports.extractMedicines = async (req, res) => {
     else if (mimetype.includes("pdf")) {
       fileType = "pdf";
       console.log("📄 Processing as PDF file");
-      const text = await extractTextFromPDF(filePath);
-      console.log(`📄 Extracted text length: ${text?.length || 0} characters`);
-      const parsed = parsePrescriptionText(text);
-      doctor = parsed.doctor || doctor;
+      try {
+        const text = await extractTextFromPDF(filePath);
+        console.log(`📄 Extracted text length: ${text?.length || 0} characters`);
+        if (text && text.length > 20) {
+          console.log(`📄 Text sample (first 200 chars): ${text.substring(0, 200)}`);
+        }
+        const parsed = parsePrescriptionText(text);
+        console.log(`📄 Parsed medicines: ${parsed.medicines?.length || 0}, doctor: ${parsed.doctor || "not found"}`);
+        doctor = parsed.doctor || doctor;
+      } catch (pdfErr) {
+        console.error("❌ PDF extraction failed:", pdfErr.message);
+        // Continue with empty medicines
+      }
 
       const addedNames = new Set();
       for (const parsedMed of parsed.medicines) {
@@ -463,10 +472,19 @@ exports.extractMedicines = async (req, res) => {
     else if (mimetype.startsWith("image/")) {
       fileType = "image";
       console.log("📷 Processing as IMAGE file");
-      const text = await extractTextFromImage(filePath);
-      console.log(`📷 Extracted text length: ${text?.length || 0} characters`);
-      const parsed = parsePrescriptionText(text);
-      doctor = parsed.doctor || doctor;
+      try {
+        const text = await extractTextFromImage(filePath);
+        console.log(`📷 Extracted text length: ${text?.length || 0} characters`);
+        if (text && text.length > 20) {
+          console.log(`📷 Text sample (first 200 chars): ${text.substring(0, 200)}`);
+        }
+        const parsed = parsePrescriptionText(text);
+        console.log(`📷 Parsed medicines: ${parsed.medicines?.length || 0}, doctor: ${parsed.doctor || "not found"}`);
+        doctor = parsed.doctor || doctor;
+      } catch (imgErr) {
+        console.error("❌ Image extraction failed:", imgErr.message);
+        // Continue with empty medicines
+      }
 
       const addedNames = new Set();
       for (const parsedMed of parsed.medicines) {

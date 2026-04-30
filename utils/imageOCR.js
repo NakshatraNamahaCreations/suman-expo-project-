@@ -4,32 +4,56 @@ const path = require("path");
 const OCR_API_KEY = process.env.OCR_API_KEY;
 const OCR_API_URL = "https://api.ocr.space/parse/image";
 
+console.log(`🔑 OCR Configuration: API_KEY=${OCR_API_KEY ? "SET" : "NOT SET"}, URL=${OCR_API_URL}`);
+
 /**
  * Run OCR.space with a specific engine and return extracted text.
  */
 async function runOCREngine(base64Data, mimeType, engine) {
-  const formBody = new URLSearchParams();
-  formBody.append("apikey", OCR_API_KEY);
-  formBody.append("base64Image", `data:${mimeType};base64,${base64Data}`);
-  formBody.append("language", "eng");
-  formBody.append("isOverlayRequired", "false");
-  formBody.append("OCREngine", String(engine));
-  formBody.append("scale", "true");
-  formBody.append("isTable", "true");
-  formBody.append("detectOrientation", "true");
+  console.log(`  🔵 Engine ${engine}: Sending request to OCR.space...`);
+  try {
+    const formBody = new URLSearchParams();
+    formBody.append("apikey", OCR_API_KEY);
+    formBody.append("base64Image", `data:${mimeType};base64,${base64Data}`);
+    formBody.append("language", "eng");
+    formBody.append("isOverlayRequired", "false");
+    formBody.append("OCREngine", String(engine));
+    formBody.append("scale", "true");
+    formBody.append("isTable", "true");
+    formBody.append("detectOrientation", "true");
 
-  const response = await fetch(OCR_API_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: formBody.toString(),
-  });
+    const response = await fetch(OCR_API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: formBody.toString(),
+    });
 
-  const result = await response.json();
+    console.log(`  🔵 Engine ${engine}: Response status ${response.status}`);
 
-  if (result.ParsedResults && result.ParsedResults.length > 0) {
-    return result.ParsedResults[0].ParsedText || "";
+    if (!response.ok) {
+      console.error(`  ❌ Engine ${engine}: HTTP ${response.status} ${response.statusText}`);
+      return "";
+    }
+
+    const result = await response.json();
+
+    if (result.IsErroredOnProcessing) {
+      console.error(`  ❌ Engine ${engine}: OCR API error - ${result.ErrorMessage}`);
+      return "";
+    }
+
+    if (result.ParsedResults && result.ParsedResults.length > 0) {
+      const text = result.ParsedResults[0].ParsedText || "";
+      console.log(`  ✅ Engine ${engine}: Extracted ${text.length} characters`);
+      return text;
+    }
+
+    console.log(`  ❌ Engine ${engine}: No results in response`);
+    return "";
+  } catch (err) {
+    console.error(`  ❌ Engine ${engine}: Exception - ${err.message}`);
+    return "";
   }
-  return "";
 }
 
 /**
@@ -37,21 +61,42 @@ async function runOCREngine(base64Data, mimeType, engine) {
  * Tries BOTH OCR engines and picks the one with better medicine-related content.
  */
 async function extractTextFromImage(filePath) {
+  console.log("📷 Starting image extraction:", { filePath, fileExists: fs.existsSync(filePath) });
+
   // Ensure proper extension
   let targetPath = filePath;
   const ext = path.extname(filePath).toLowerCase();
   if (!ext || ![".jpg", ".jpeg", ".png", ".bmp", ".webp"].includes(ext)) {
+    console.log("⚠️  Invalid or missing extension, copying as .jpg:", ext);
     targetPath = filePath + ".jpg";
-    fs.copyFileSync(filePath, targetPath);
+    try {
+      fs.copyFileSync(filePath, targetPath);
+      console.log("✅ File copied to:", targetPath);
+    } catch (copyErr) {
+      console.error("❌ Failed to copy file:", copyErr.message);
+      return fallbackTesseract(filePath, filePath);
+    }
   }
 
   if (!OCR_API_KEY) {
-    console.log("No OCR_API_KEY, falling back to Tesseract");
+    console.log("⚠️  No OCR_API_KEY, falling back to Tesseract");
     return fallbackTesseract(targetPath, filePath);
   }
 
-  const imageData = fs.readFileSync(targetPath);
-  const base64 = imageData.toString("base64");
+  console.log("✅ OCR_API_KEY is set, proceeding with OCR.space API");
+
+  let imageData, base64;
+  try {
+    imageData = fs.readFileSync(targetPath);
+    console.log(`📷 File read successfully, size: ${imageData.length} bytes`);
+    base64 = imageData.toString("base64");
+    console.log(`📷 Base64 encoded, length: ${base64.length} characters`);
+  } catch (readErr) {
+    console.error("❌ Failed to read file:", readErr.message);
+    if (targetPath !== filePath) try { fs.unlinkSync(targetPath); } catch {}
+    return fallbackTesseract(targetPath, filePath);
+  }
+
   const mimeType = targetPath.endsWith(".png") ? "image/png" : "image/jpeg";
 
   try {
@@ -114,12 +159,17 @@ async function extractTextFromImage(filePath) {
 }
 
 async function fallbackTesseract(targetPath, filePath) {
+  console.log(`🟡 Falling back to Tesseract for: ${targetPath}`);
   try {
     const Tesseract = require("tesseract.js");
+    console.log("🟡 Tesseract.js loaded, starting recognition...");
     const { data } = await Tesseract.recognize(targetPath, "eng");
+    const text = (data.text || "").toLowerCase();
+    console.log(`✅ Tesseract extracted ${text.length} characters`);
     if (targetPath !== filePath) try { fs.unlinkSync(targetPath); } catch {}
-    return (data.text || "").toLowerCase();
-  } catch {
+    return text;
+  } catch (err) {
+    console.error(`❌ Tesseract failed: ${err.message}`);
     if (targetPath !== filePath) try { fs.unlinkSync(targetPath); } catch {}
     return "";
   }
