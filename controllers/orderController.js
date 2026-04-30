@@ -897,8 +897,13 @@ exports.reorderOrder = async (req, res) => {
     }
 
     console.log(`✅ Found original order: ${original.orderId}`);
+    console.log(`   Items: ${original.items?.length || 0}, Total: ${original.totalAmount}, Status: ${original.orderStatus}`);
 
     // ── Step 2: Extract items from original ──
+    if (!original.items || original.items.length === 0) {
+      return res.status(400).json({ success: false, message: "Original order has no items" });
+    }
+
     const items = original.items.map(item => ({
       medicineId: item.medicineId,
       qty: item.qty,
@@ -909,12 +914,29 @@ exports.reorderOrder = async (req, res) => {
     const patientDoc = original.patient;
     const userId = original.userId;
 
-    console.log(`📋 Reordering ${items.length} medicines`);
+    if (!patientDoc && !userId) {
+      return res.status(400).json({ success: false, message: "Patient or user ID not found in original order" });
+    }
+
+    console.log(`📋 Reordering ${items.length} medicines from original order`);
+    console.log(`👤 Patient: ${patientDoc?.name || "N/A"}, User: ${userId}`);
 
     // ── Step 3: Fetch current medicine prices ──
     const Medicine = require("../models/Medicine");
     const medIds = items.map(i => i.medicineId).filter(Boolean);
+
+    if (medIds.length === 0) {
+      return res.status(400).json({ success: false, message: "No valid medicine IDs found in items" });
+    }
+
+    console.log(`🔍 Fetching ${medIds.length} medicines from database`);
     const medicines = await Medicine.find({ _id: { $in: medIds } });
+    console.log(`✅ Found ${medicines.length} medicines in database`);
+
+    if (medicines.length === 0) {
+      return res.status(400).json({ success: false, message: "No medicines found in database" });
+    }
+
     const medMap = new Map(medicines.map(m => [m._id.toString(), m]));
 
     // ── Step 4: Build order items with current prices ──
@@ -924,7 +946,7 @@ exports.reorderOrder = async (req, res) => {
     for (const item of items) {
       const med = medMap.get(item.medicineId?.toString());
       if (!med) {
-        console.warn(`⚠️  Medicine not found: ${item.medicineId}`);
+        console.warn(`⚠️  Medicine not found in DB: ${item.medicineId} (name: ${item.name || "unknown"})`);
         continue;
       }
 
@@ -1029,6 +1051,7 @@ exports.reorderOrder = async (req, res) => {
     });
   } catch (err) {
     console.error("❌ Reorder error:", err.message);
+    console.error("Stack trace:", err.stack);
     res.status(500).json({
       success: false,
       message: "Failed to create reorder",
