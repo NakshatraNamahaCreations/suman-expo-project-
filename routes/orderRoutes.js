@@ -51,14 +51,30 @@ router.patch("/:id/status", updateOrderStatus);
 // DOWNLOAD INVOICE PDF
 router.get("/:id/invoice-pdf", async (req, res) => {
   try {
+    console.log("📄 Invoice PDF request for order:", req.params.id);
+
     const Order = require("../models/Order");
     const PDFDocument = require("pdfkit");
 
     const order = await Order.findById(req.params.id);
-    if (!order)
+    if (!order) {
+      console.error("❌ Order not found:", req.params.id);
       return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    // Validate required fields
+    if (!order.orderId) {
+      console.error("❌ Order has no orderId");
+      return res.status(400).json({ success: false, message: "Order missing orderId" });
+    }
+
+    if (order.totalAmount === undefined || order.totalAmount === null) {
+      console.error("❌ Order has no totalAmount:", order._id);
+      return res.status(400).json({ success: false, message: "Order missing totalAmount" });
+    }
 
     const meds = order.items || [];
+    console.log(`✅ Generating invoice for order ${order.orderId} with ${meds.length} medicines`);
 
     const doc = new PDFDocument({ size: "A4", margin: 50 });
     res.setHeader("Content-Type", "application/pdf");
@@ -205,12 +221,22 @@ router.get("/:id/invoice-pdf", async (req, res) => {
     doc.text("This is a computer-generated invoice.", { align: "center" });
 
     doc.end();
+    console.log(`✅ Invoice generated successfully for order ${order.orderId}`);
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Invoice generation failed",
-      error: error.message,
-    });
+    console.error("❌ Invoice generation error:", error.message);
+    console.error("Stack:", error.stack?.substring(0, 300));
+
+    // Check if response has already been sent (headers sent)
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        message: "Invoice generation failed",
+        error: error.message,
+      });
+    } else {
+      // If headers were already sent, we can't send JSON. Just end the response.
+      res.end();
+    }
   }
 });
 
