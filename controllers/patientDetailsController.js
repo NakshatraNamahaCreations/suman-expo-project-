@@ -499,26 +499,17 @@ exports.deletePatientDetails = async (req, res) => {
       });
     }
 
-    // ✅ 2. CHECK USER OWNERSHIP
-    // if (patient.userId !== req.user?.phone) {
-    //   return res.status(403).json({
-    //     success: false,
-    //     message: "Not authorized"
-    //   });
-    // }
-// ✅ Allow Postman bypass ONLY in development
-const isPostman =
-  req.headers["x-debug-mode"] === "true" &&
-  process.env.NODE_ENV !== "production";
+    // ✅ 2. CHECK AUTHORIZATION - ALLOW ADMIN OR OWNER
+    const TeamMember = require("../models/TeamMember");
+    const isAdmin = req.user?._id && await TeamMember.exists({ _id: req.user._id });
 
-if (!isPostman) {
-  if (patient.userId !== req.user?.phone) {
-    return res.status(403).json({
-      success: false,
-      message: "Not authorized"
-    });
-  }
-}
+    // Allow if admin OR patient owner
+    if (!isAdmin && patient.userId !== req.user?.phone) {
+      return res.status(403).json({
+        success: false,
+        message: "Not authorized"
+      });
+    }
 
     // ✅ 3. CHECK ORDERS
    const orderExists = await Order.exists({
