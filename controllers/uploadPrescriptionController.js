@@ -434,13 +434,16 @@ exports.extractMedicines = async (req, res) => {
     else if (mimetype.includes("pdf")) {
       fileType = "pdf";
       console.log("📄 Processing as PDF file");
+      let parsed = { medicines: [], doctor: null };
+      let text = "";
+
       try {
-        const text = await extractTextFromPDF(filePath);
+        text = await extractTextFromPDF(filePath);
         console.log(`📄 Extracted text length: ${text?.length || 0} characters`);
         if (text && text.length > 20) {
           console.log(`📄 Text sample (first 200 chars): ${text.substring(0, 200)}`);
         }
-        const parsed = parsePrescriptionText(text);
+        parsed = parsePrescriptionText(text);
         console.log(`📄 Parsed medicines: ${parsed.medicines?.length || 0}, doctor: ${parsed.doctor || "not found"}`);
         doctor = parsed.doctor || doctor;
       } catch (pdfErr) {
@@ -472,13 +475,16 @@ exports.extractMedicines = async (req, res) => {
     else if (mimetype.startsWith("image/")) {
       fileType = "image";
       console.log("📷 Processing as IMAGE file");
+      let parsed = { medicines: [], doctor: null };
+      let text = "";
+
       try {
-        const text = await extractTextFromImage(filePath);
+        text = await extractTextFromImage(filePath);
         console.log(`📷 Extracted text length: ${text?.length || 0} characters`);
         if (text && text.length > 20) {
           console.log(`📷 Text sample (first 200 chars): ${text.substring(0, 200)}`);
         }
-        const parsed = parsePrescriptionText(text);
+        parsed = parsePrescriptionText(text);
         console.log(`📷 Parsed medicines: ${parsed.medicines?.length || 0}, doctor: ${parsed.doctor || "not found"}`);
         doctor = parsed.doctor || doctor;
       } catch (imgErr) {
