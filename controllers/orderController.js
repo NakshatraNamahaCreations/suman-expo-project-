@@ -221,10 +221,10 @@ exports.createOrder = async (req, res) => {
           });
         }
 
-        if (med.stock < item.qty) {
+        if (med.qty < item.qty) {
           return res.status(400).json({
             success: false,
-            message: `${med.name} only has ${med.stock} in stock`,
+            message: `${med.description || med.name} only has ${med.qty} in stock`,
           });
         }
       }
@@ -232,14 +232,14 @@ exports.createOrder = async (req, res) => {
       // 🔥 CALCULATE TOTAL
       serverSubtotal = items.reduce((sum, item) => {
         const med = medMap[item.medicineId.toString()];
-        const price = Number(med.sellingPrice || 0);
+        const price = Number(med.newMrp || 0);
         return sum + item.qty * price;
       }, 0);
 
       serverGst = items.reduce((sum, item) => {
         const med = medMap[item.medicineId.toString()];
-        const price = Number(med.sellingPrice || 0);
-        const pct = med.gstPct || 5;
+        const price = Number(med.newMrp || 0);
+        const pct = med.gstPercent || 5;
         return sum + (item.qty * price * pct) / 100;
       }, 0);
       serverGst = Math.round(serverGst * 100) / 100;
@@ -288,14 +288,27 @@ exports.createOrder = async (req, res) => {
       totalAmount: serverTotal,
       items: (items || []).map((item) => {
         const med = medMap[item.medicineId.toString()];
-        const price = Number(med.sellingPrice || 0);
+        const price = Number(med.newMrp || 0);
 
         return {
           medicineId: item.medicineId,
-          name: med.name,
+          name: med.description || "",
+          description: med.description || "",
+          mfr: med.mfr || "",
+          category: med.category || "",
+          pack: med.pack || "",
+          batchNo: med.batchNo || "",
+          expDate: med.expDate || "",
+          oldMrp: med.oldMrp || 0,
+          discPercent: med.discPercent || 0,
+          free: med.free || 0,
+          scmDisc: med.scmDisc || 0,
+          taxableValue: med.taxableValue || 0,
+          gstPercent: med.gstPercent || 5,
+          netValue: med.netValue || 0,
+          hsnCode: med.hsnCode || "",
           qty: item.qty,
           price,
-          unit: med.unit || "tablet",
           duration: item.duration || 0,
           freq: item.freq || { m: 0, a: 0, n: 0 },
           subtotal: item.qty * price,
@@ -342,9 +355,7 @@ exports.createOrder = async (req, res) => {
             filter: { _id: item.medicineId },
             update: {
               $inc: {
-                stock: -item.qty,
-                demand30: item.qty,
-                demand90: item.qty,
+                qty: -item.qty,
               },
             },
           },
@@ -702,10 +713,10 @@ exports.createAdminOrder = async (req, res) => {
         });
       }
 
-      if (med.stock < mergedItems[id]) {
+      if (med.qty < mergedItems[id]) {
         return res.status(400).json({
           success: false,
-          message: `${med.name} only has ${med.stock} in stock`,
+          message: `${med.description || med.name} only has ${med.qty} in stock`,
         });
       }
     }
@@ -718,14 +729,17 @@ exports.createAdminOrder = async (req, res) => {
       const freq = item.freq || { m: 1, a: 0, n: 1 };
       const duration = item.duration || 5;
       const qty = item.qty ?? (freq.m + freq.a + freq.n) * duration;
-      const price = Number(med.sellingPrice || 0);
+      const price = Number(med.newMrp || 0);
       const itemSub = qty * price;
       subtotal += itemSub;
       return { medicine: med._id, duration, freq, qty, price, subtotal: itemSub };
     });
 
-    const avgGstPct = medicines.reduce((sum, m) => sum + (m.gstPct || 5), 0) / medicines.length;
-    const gst = Math.round(subtotal * (avgGstPct / 100) * 100) / 100;
+    // Calculate per-medicine GST sum instead of average
+    const gst = Math.round(pressMeds.reduce((sum, pm) => {
+      const med = medMap[pm.medicine.toString()];
+      return sum + (pm.qty * pm.price * (med.gstPercent || 5)) / 100;
+    }, 0) * 100) / 100;
     const total = Math.round((subtotal + gst - discount) * 100) / 100;
 
     const start = new Date();
@@ -782,9 +796,7 @@ exports.createAdminOrder = async (req, res) => {
           filter: { _id: id },
           update: {
             $inc: {
-              stock: -qty,
-              demand30: qty,
-              demand90: qty,
+              qty: -qty,
             },
           },
         },
@@ -951,23 +963,36 @@ exports.reorderOrder = async (req, res) => {
       }
 
       // Check stock
-      if (med.stock < item.qty) {
+      if (med.qty < item.qty) {
         return res.status(400).json({
           success: false,
-          message: `${med.name} is out of stock (available: ${med.stock}, requested: ${item.qty})`,
+          message: `${med.description || med.name} is out of stock (available: ${med.qty}, requested: ${item.qty})`,
         });
       }
 
-      const itemPrice = med.sellingPrice || 0;
+      const itemPrice = med.newMrp || 0;
       const itemSubtotal = itemPrice * item.qty;
       subtotal += itemSubtotal;
 
       builtItems.push({
         medicineId: med._id,
-        name: med.name,
+        name: med.description || "",
+        description: med.description || "",
+        mfr: med.mfr || "",
+        category: med.category || "",
+        pack: med.pack || "",
+        batchNo: med.batchNo || "",
+        expDate: med.expDate || "",
+        oldMrp: med.oldMrp || 0,
+        discPercent: med.discPercent || 0,
+        free: med.free || 0,
+        scmDisc: med.scmDisc || 0,
+        taxableValue: med.taxableValue || 0,
+        gstPercent: med.gstPercent || 5,
+        netValue: med.netValue || 0,
+        hsnCode: med.hsnCode || "",
         qty: item.qty,
         price: itemPrice,
-        unit: med.unit || "tablet",
         duration: item.duration || 0,
         freq: item.freq || { m: 1, a: 0, n: 1 },
         subtotal: itemSubtotal,
@@ -979,7 +1004,11 @@ exports.reorderOrder = async (req, res) => {
     }
 
     // ── Step 5: Calculate pricing ──
-    const gst = Math.round(subtotal * 0.05 * 100) / 100;
+    // Calculate per-medicine GST sum instead of fixed 5%
+    const gst = Math.round(builtItems.reduce((sum, item) => {
+      const med = medMap.get(item.medicineId.toString());
+      return sum + (item.qty * item.price * (med?.gstPercent || 5)) / 100;
+    }, 0) * 100) / 100;
     const deliveryFee = subtotal >= 499 ? 0 : 50;
     const totalAmount = Math.round((subtotal + gst + deliveryFee) * 100) / 100;
 
@@ -1037,7 +1066,7 @@ exports.reorderOrder = async (req, res) => {
       const bulkOps = builtItems.map(item => ({
         updateOne: {
           filter: { _id: item.medicineId },
-          update: { $inc: { stock: -item.qty, demand30: item.qty } },
+          update: { $inc: { qty: -item.qty } },
         },
       }));
       await Medicine.bulkWrite(bulkOps);

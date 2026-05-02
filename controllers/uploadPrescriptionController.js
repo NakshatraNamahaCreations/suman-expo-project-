@@ -373,10 +373,10 @@ exports.extractMedicines = async (req, res) => {
       }
 
       const matches = dbMedicines.filter((dbMed) => {
-        const dbBase = dbMed.name.toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").replace(/\s+/g, "");
+        const dbBase = dbMed.description.toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").replace(/\s+/g, "");
         const isMatch = dbBase.includes(search) || search.includes(dbBase);
         if (isMatch) {
-          console.log(`✅ Matched: "${medName}" → "${dbMed.name}" (search="${search}", dbBase="${dbBase}")`);
+          console.log(`✅ Matched: "${medName}" → "${dbMed.description}" (search="${search}", dbBase="${dbBase}")`);
         }
         return isMatch;
       });
@@ -384,7 +384,7 @@ exports.extractMedicines = async (req, res) => {
       if (matches.length === 0) {
         console.log(`❌ No match for: "${medName}" (search="${search}")`);
         // Log top 5 database medicines for comparison
-        console.log(`   Available medicines (first 5): ${dbMedicines.slice(0, 5).map(m => m.name).join(", ")}`);
+        console.log(`   Available medicines (first 5): ${dbMedicines.slice(0, 5).map(m => m.description).join(", ")}`);
       }
 
       return matches[0] || null;
@@ -394,13 +394,12 @@ exports.extractMedicines = async (req, res) => {
     const buildMedicineObj = (name, dbMatch, freq, duration) => {
       const daily = freq.m + freq.a + freq.n;
       const qty = daily * duration;
-      const price = dbMatch ? (dbMatch.sellingPrice || dbMatch.price || 0) : 0;
-      const stock = dbMatch?.stock || 0;
+      const price = dbMatch ? (dbMatch.newMrp || dbMatch.price || 0) : 0;
+      const stock = dbMatch?.qty || 0;
       return {
         medicineId: dbMatch?._id || null,
-        name: dbMatch?.name || name,
-        category: dbMatch?.category || "Tablet",
-        unit: dbMatch?.unit || "tablets",
+        description: dbMatch?.description || name,
+        pack: dbMatch?.pack || "",
         dosage: "",
         freq,
         freqLabel: `${freq.m}-${freq.a}-${freq.n}`,
@@ -441,7 +440,7 @@ exports.extractMedicines = async (req, res) => {
           const dbMatch = findDBMatch(medName);
           if (!dbMatch || addedNames.has(dbMatch.name.toLowerCase())) continue;
 
-          addedNames.add(dbMatch.name.toLowerCase());
+          addedNames.add(dbMatch.description.toLowerCase());
           matchedMeds.push(buildMedicineObj(medName, dbMatch, { m: 1, a: 0, n: 1 }, 5));
         }
       } catch (err) {

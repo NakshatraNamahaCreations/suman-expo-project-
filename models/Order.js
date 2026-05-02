@@ -81,9 +81,10 @@ const orderSchema = new mongoose.Schema(
           ref: "Medicine",
         },
 
-        name: {
+        /* CORE FIELDS */
+        itemName: {
           type: String,
-          required: true,
+          default: ""
         },
 
         qty: {
@@ -91,6 +92,17 @@ const orderSchema = new mongoose.Schema(
           required: true,
         },
 
+        price: {
+          type: Number,
+          required: true,
+        },
+
+        subtotal: {
+          type: Number,
+          default: 0,
+        },
+
+        /* DOSAGE */
         duration: {
           type: Number,
           default: 0,
@@ -102,20 +114,66 @@ const orderSchema = new mongoose.Schema(
           n: { type: Number, default: 0 },
         },
 
-        price: {
-          type: Number,
-          required: true,
-        },
-
-        unit: {
+        /* MEDICINE SNAPSHOT FIELDS */
+        mfCode: {
           type: String,
-          default: "tablet",
+          default: ""
         },
 
-        subtotal: {
-          type: Number,
-          default: 0,
+        mfacName: {
+          type: String,
+          default: ""
         },
+
+        itemCode: {
+          type: String,
+          default: ""
+        },
+
+        hsnCode: {
+          type: String,
+          default: ""
+        },
+
+        batchNo: {
+          type: String,
+          default: ""
+        },
+
+        expDate: {
+          type: String,
+          default: ""
+        },
+
+        packOf: {
+          type: String,
+          default: ""
+        },
+
+        oldMrpPrice: {
+          type: Number,
+          default: 0
+        },
+
+        discount: {
+          type: Number,
+          default: 0
+        },
+
+        withoutTax: {
+          type: Number,
+          default: 0
+        },
+
+        gstPercent: {
+          type: Number,
+          default: 5
+        },
+
+        netValue: {
+          type: Number,
+          default: 0
+        }
       },
     ],
 

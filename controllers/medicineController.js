@@ -13,7 +13,6 @@ function paginate(query) {
 }
 
 
-
 /* ===============================
    BULK UPLOAD MEDICINES (EXCEL)
 ================================ */
@@ -96,74 +95,83 @@ exports.uploadMedicinesExcel = async (req, res) => {
       return null;
     };
 
+    // ✅ FIELD MAPPING: Excel columns to database fields
+    const fieldMappings = {
+      mfr: ['mfr', 'manufacturer', 'mfac name'],
+      description: ['description', 'product name', 'medicine name', 'name', 'item name'],
+      category: ['category', 'type'],
+      qty: ['qty', 'quantity', 'stock', 'qnty'],
+      pack: ['pack', 'pack size', 'packing'],
+      batchNo: ['batch no', 'batchno', 'batch number', 'batch'],
+      expDate: ['exp. date', 'exp date', 'expiry date', 'expiry', 'expdate'],
+      oldMrp: ['old mrp', 'oldmrp', 'old mrp price', 'previous mrp', 'previous price'],
+      newMrp: ['new mrp', 'newmrp', 'new mrp price', 'mrp', 'selling price', 'price'],
+      tradePrice: ['trade price', 'tradeprice', 'cost price', 'cost', 'purchase price'],
+      discPercent: ['disc %', 'discount %', 'discount percent', 'discount'],
+      free: ['free', 'free units'],
+      scmDisc: ['scm disc', 'scmdisc', 'scm discount'],
+      taxableValue: ['taxable value', 'taxablevalue', 'taxable', 'without tax'],
+      gstPercent: ['gst %', 'gst%', 'gst percent', 'tax percent'],
+      netValue: ['net value', 'netvalue', 'net', 'final value'],
+      hsnCode: ['hsn code', 'hsncode', 'hsn'],
+      status: ['status']
+    };
+
     let parsedData = [];
 
     for (let row of data) {
       // ✅ CLEAN ENTIRE ROW
       const r = cleanRow(row);
 
-      // Try multiple column names for each field
-      const name = findField(r, 'medicine name', 'name', 'product name', 'medicine_name', 'product_name');
-      if (!name) {
-        console.log("⚠️ Skipping row - no medicine name found:", r);
+      // ✅ TRY TO FIND DESCRIPTION (required field)
+      const description = findField(r, ...fieldMappings.description);
+      if (!description) {
+        console.log("⚠️ Skipping row - no Description found:", r);
         continue;
       }
 
-      const normalize = (str) =>
-        clean(str).toLowerCase();
+      const normalize = (str) => clean(str).toLowerCase();
+      const normalizedName = normalize(description);
 
-      const normalizedName = normalize(name);
+      const existing = await Medicine.findOne({ normalizedName });
 
-      const existing = await Medicine.findOne({
-        normalizedName
-      });
-
-      // ✅ CATEGORY-BASED UNIT VALIDATION
-      const categoryUnitMap = {
-        tablet: ["tablets", "capsules"],
-        capsule: ["capsules", "tablets"],
-        syrup: ["ml"],
-        liquid: ["ml", "litre"],
-        injection: ["ml"],
-        ointment: ["grams"],
-        dressing: ["sheets"],
-        device: ["pieces"],
-        "medical device": ["pieces"]
-      };
-
-      const categoryRaw = findField(r, 'category', 'type') || "Tablet";
-      const category = Object.keys(categoryUnitMap).find(k => k.toLowerCase() === categoryRaw.toLowerCase()) || "Tablet";
-      const allowedUnits = categoryUnitMap[category.toLowerCase()] || ["tablets"];
-
-      const unitField = findField(r, 'unit', 'unit type', 'unit_type', 'measurement');
-
-      // More flexible unit matching (handle singular/plural, spaces, etc.)
-      let unit = allowedUnits[0]; // Default to first allowed unit
-      if (unitField) {
-        const normalizedField = unitField.toLowerCase().trim().replace(/s$/, ''); // Remove trailing 's' for plural
-        const matchedUnit = allowedUnits.find(u =>
-          u.toLowerCase() === unitField.toLowerCase() || // Exact match
-          u.toLowerCase().replace(/s$/, '') === normalizedField // Match without plural 's'
-        );
-        if (matchedUnit) unit = matchedUnit;
-      }
-
-      const doseAmount = Number(findField(r, 'dose amount', 'doseamount', 'dose_amount', 'dose') || 1);
-      const costPrice = Number(findField(r, 'cost price', 'costprice', 'cost_price', 'cost', 'cp') || 0);
-      const sellingPrice = Number(findField(r, 'selling price', 'sellingprice', 'selling_price', 'price', 'sp') || 0);
-      const stock = Number(findField(r, 'stock', 'quantity', 'qty') || 0);
-      const minStock = Number(findField(r, 'min stock', 'minstock', 'min_stock', 'minimum stock', 'reorder point') || 10);
-      const status = findField(r, 'status') || "Active";
+      // ✅ EXTRACT ALL FIELDS USING MAPPINGS
+      const mfr = findField(r, ...fieldMappings.mfr) || "";
+      const category = findField(r, ...fieldMappings.category) || "";
+      const batchNo = findField(r, ...fieldMappings.batchNo) || "";
+      const expDate = findField(r, ...fieldMappings.expDate) || "";
+      const qty = Number(findField(r, ...fieldMappings.qty) || 0);
+      const pack = findField(r, ...fieldMappings.pack) || "";
+      const oldMrp = Number(findField(r, ...fieldMappings.oldMrp) || 0);
+      const newMrp = Number(findField(r, ...fieldMappings.newMrp) || 0);
+      const tradePrice = Number(findField(r, ...fieldMappings.tradePrice) || 0);
+      const discPercent = Number(findField(r, ...fieldMappings.discPercent) || 0);
+      const free = Number(findField(r, ...fieldMappings.free) || 0);
+      const scmDisc = Number(findField(r, ...fieldMappings.scmDisc) || 0);
+      const taxableValue = Number(findField(r, ...fieldMappings.taxableValue) || 0);
+      const gstPercent = Number(findField(r, ...fieldMappings.gstPercent) || 5);
+      const netValue = Number(findField(r, ...fieldMappings.netValue) || 0);
+      const hsnCode = findField(r, ...fieldMappings.hsnCode) || "";
+      const status = findField(r, ...fieldMappings.status) || "Active";
 
       const payload = {
-        name,
+        mfr,
+        description,
         category,
-        unit,
-        doseAmount,
-        costPrice,
-        sellingPrice,
-        stock,
-        minStock,
+        batchNo,
+        expDate,
+        qty,
+        pack,
+        oldMrp,
+        newMrp,
+        tradePrice,
+        discPercent,
+        free,
+        scmDisc,
+        taxableValue,
+        gstPercent,
+        netValue,
+        hsnCode,
         status,
       };
 
@@ -195,37 +203,37 @@ exports.bulkSaveMedicines = async (req, res) => {
     let created = 0;
     let updated = 0;
 
-for (let item of medicines) {
-  const { id, exists, ...cleanData } = item;
+    for (let item of medicines) {
+      const { id, exists, ...cleanData } = item;
 
-  if (id) {
-   const updatedData = {
-  ...cleanData,
-  normalizedName: cleanData.name
-    ?.toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim()
-};
+      if (id) {
+        const updatedData = {
+          ...cleanData,
+          normalizedName: cleanData.description
+            ?.toLowerCase()
+            .replace(/\s+/g, " ")
+            .trim()
+        };
 
-await Medicine.findByIdAndUpdate(id, updatedData);
-    updated++;
-  } else {
-   const normalizedName = cleanData.name
-  ?.toLowerCase()
-  .replace(/\s+/g, " ")
-  .trim();
+        await Medicine.findByIdAndUpdate(id, updatedData);
+        updated++;
+      } else {
+        const normalizedName = cleanData.description
+          ?.toLowerCase()
+          .replace(/\s+/g, " ")
+          .trim();
 
-await Medicine.findOneAndUpdate(
-  { normalizedName },
-  {
-    ...cleanData,
-    normalizedName
-  },
-  { upsert: true, new: true }
-);
-    created++;
-  }
-}
+        await Medicine.findOneAndUpdate(
+          { normalizedName },
+          {
+            ...cleanData,
+            normalizedName
+          },
+          { upsert: true, new: true }
+        );
+        created++;
+      }
+    }
 
     res.json({
       success: true,
@@ -249,39 +257,9 @@ exports.createMedicine = async (req, res) => {
   try {
     const data = req.body;
 
-    // Fix sellingPrice fallback
-    if (!data.sellingPrice && data.price) {
-      data.sellingPrice = data.price;
-    }
-
-    // Inactive validation
-    if (data.status === "Inactive" && !data.inactiveReason) {
-      return res.status(400).json({
-        message: "Reason required for inactive medicine"
-      });
-    }
-
-    // ✅ CATEGORY-UNIT VALIDATION
-    const categoryUnitMap = {
-      Tablet: ["tablets", "capsules"],
-      Capsule: ["capsules", "tablets"],
-      Syrup: ["ml"],
-      Liquid: ["ml", "litre"],
-      Injection: ["ml"],
-      Ointment: ["grams"],
-      Dressing: ["sheets"],
-      Device: ["pieces"],
-      "Medical Device": ["pieces"]
-    };
-
-    const { category, unit } = data;
-
-    if (categoryUnitMap[category]) {
-      if (!categoryUnitMap[category].includes(unit)) {
-        return res.status(400).json({
-          message: `Invalid unit '${unit}' for category '${category}'`
-        });
-      }
+    // Handle newMrp fallback from price field (backward compat)
+    if (!data.newMrp && data.price) {
+      data.newMrp = data.price;
     }
 
     const medicine = await Medicine.create(data);
@@ -310,15 +288,15 @@ exports.getMedicines = async (req, res) => {
 
     // Paginated response
     const { page, limit, skip, all } = paginate(req.query);
-    const { search, status, category } = req.query;
+    const { search, status, mfr } = req.query;
     const filter = {};
 
     if (status) filter.status = status;
-    if (category) filter.category = { $regex: category, $options: "i" };
+    if (mfr) filter.mfr = { $regex: mfr, $options: "i" };
     if (search) {
       filter.$or = [
-        { name: { $regex: search, $options: "i" } },
-        { category: { $regex: search, $options: "i" } },
+        { description: { $regex: search, $options: "i" } },
+        { mfr: { $regex: search, $options: "i" } },
       ];
     }
 
@@ -367,46 +345,23 @@ exports.getMedicineById = async (req, res) => {
 exports.updateMedicine = async (req, res) => {
   try {
 
-    if (!req.body.sellingPrice && req.body.price) {
-      req.body.sellingPrice = req.body.price;
+    if (!req.body.newMrp && req.body.price) {
+      req.body.newMrp = req.body.price;
     }
 
-    // ✅ ADD SAME VALIDATION
-    const categoryUnitMap = {
-      Tablet: ["tablets", "capsules"],
-      Capsule: ["capsules", "tablets"],
-      Syrup: ["ml"],
-      Liquid: ["ml", "litre"],
-      Injection: ["ml"],
-      Ointment: ["grams"],
-      Dressing: ["sheets"],
-      Device: ["pieces"],
-      "Medical Device": ["pieces"]
+    const updatedData = {
+      ...req.body,
+      normalizedName: req.body.description
+        ?.toLowerCase()
+        .replace(/\s+/g, " ")
+        .trim()
     };
 
-    const { category, unit } = req.body;
-
-    if (categoryUnitMap[category]) {
-      if (!categoryUnitMap[category].includes(unit)) {
-        return res.status(400).json({
-          message: `Invalid unit '${unit}' for category '${category}'`
-        });
-      }
-    }
-
-const updatedData = {
-  ...req.body,
-  normalizedName: req.body.name
-    ?.toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim()
-};
-
-const medicine = await Medicine.findByIdAndUpdate(
-  req.params.id,
-  updatedData,
-  { new: true, runValidators: true }
-);
+    const medicine = await Medicine.findByIdAndUpdate(
+      req.params.id,
+      updatedData,
+      { new: true, runValidators: true }
+    );
 
     res.json(medicine);
 
@@ -461,20 +416,16 @@ exports.adjustStock = async (req, res) => {
 
     // ➕ Add stock
     if (type === "add") {
-      medicine.stock += qty;
+      medicine.qty += qty;
     }
 
     // ➖ Reduce stock
     if (type === "reduce") {
-      if (medicine.stock < qty) {
+      if (medicine.qty < qty) {
         return res.status(400).json({ message: "Insufficient stock" });
       }
 
-      medicine.stock -= qty;
-
-      // 📊 Update demand tracking
-      medicine.demand30 = (medicine.demand30 || 0) + qty;
-      medicine.demand90 = (medicine.demand90 || 0) + qty;
+      medicine.qty -= qty;
     }
 
     // 💾 Save changes

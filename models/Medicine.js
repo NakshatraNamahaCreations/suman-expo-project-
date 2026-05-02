@@ -1,179 +1,151 @@
 const mongoose = require("mongoose");
 
 const medicineSchema = new mongoose.Schema(
-{
-  name: {
-    type: String,
-    required: true,
-    trim: true
+  {
+    /* MEDICINE IDENTIFICATION */
+    mfr: {
+      type: String,
+      default: ""
+    },
+
+    description: {
+      type: String,
+      required: true,
+      trim: true
+    },
+
+    /* BATCH & EXPIRY */
+    batchNo: {
+      type: String,
+      default: ""
+    },
+
+    expDate: {
+      type: String,
+      default: ""
+    },
+
+    /* PACK & INVENTORY */
+    pack: {
+      type: String,
+      default: ""
+    },
+
+    qty: {
+      type: Number,
+      default: 0
+    },
+
+    /* PRICING */
+    oldMrp: {
+      type: Number,
+      default: 0
+    },
+
+    newMrp: {
+      type: Number,
+      default: 0
+    },
+
+    tradePrice: {
+      type: Number,
+      default: 0
+    },
+
+    /* DISCOUNTS & TAX */
+    discPercent: {
+      type: Number,
+      default: 0
+    },
+
+    free: {
+      type: Number,
+      default: 0
+    },
+
+    scmDisc: {
+      type: Number,
+      default: 0
+    },
+
+    taxableValue: {
+      type: Number,
+      default: 0
+    },
+
+    gstPercent: {
+      type: Number,
+      default: 5
+    },
+
+    netValue: {
+      type: Number,
+      default: 0
+    },
+
+    /* CLASSIFICATION */
+    hsnCode: {
+      type: String,
+      default: ""
+    },
+
+    /* SEARCH & UNIQUENESS */
+    normalizedName: {
+      type: String,
+      lowercase: true,
+      trim: true,
+      index: true,
+      unique: true
+    },
+
+    /* STATUS */
+    status: {
+      type: String,
+      enum: ["Active", "Inactive"],
+      default: "Active"
+    }
   },
-
-  category: {
-    type: String,
-    default: "Tablet"
-  },
-
-unit: {
-  type: String,
-  required: true,
-  enum: ["ml", "litre", "tablets", "sheets", "pieces", "capsules", "grams"]
-},
-
-doseAmount: {
-  type: Number,
-  default: 1
-},
-
-normalizedName: {
-  type: String,
-  lowercase: true,
-  trim: true,
-  index: true,
-  unique: true   // ✅ ADD THIS
-},
-  /* PRICING */
-  costPrice: {
-    type: Number,
-    default: 0
-  },
-
-  sellingPrice: {
-    type: Number,
-    default: 0
-  },
-
-
-  /* INVENTORY */
-  stock: {
-    type: Number,
-    default: 0
-  },
-
-  minStock: {
-    type: Number,
-    default: 10
-  },
-
-  maxStock: {
-    type: Number,
-    default: 200
-  },
-
-  expiry: Date,
-
-  /* STATUS */
-  status: {
-    type: String,
-    enum: ["Active","Inactive"],
-    default: "Active"
-  },
-
-  inactiveReason: String,
-
-  /* DEMAND */
-  demand30: {
-    type: Number,
-    default: 0
-  },
-
-  demand90: {
-    type: Number,
-    default: 0
-  },
-
-  gstPct: {
-    type: Number,
-    default: 12
-  }
-
-},
-{ timestamps: true }
+  { timestamps: true }
 );
 
-
+/* ===============================
+   PRICE VIRTUAL (for backward compat)
+================================ */
+medicineSchema.virtual("price").get(function () {
+  return this.newMrp;
+});
 
 /* ===============================
-   STOCK STATUS
+   PROFIT MARGIN
 ================================ */
-
-medicineSchema.virtual("stockStatus").get(function(){
-
-  if(this.stock === 0)
-    return "Out of Stock";
-
-  if(this.stock <= this.minStock)
-    return "Low Stock";
-
-  return "In Stock";
-
+medicineSchema.virtual("profitPerUnit").get(function () {
+  return (this.newMrp || 0) - (this.tradePrice || 0);
 });
 
-
+medicineSchema.virtual("profitMargin").get(function () {
+  if (!this.newMrp) return 0;
+  return Math.round(((this.newMrp - (this.tradePrice || 0)) / this.newMrp) * 100);
+});
 
 /* ===============================
-   AUTO REORDER QTY
+   PRE-SAVE HOOK
 ================================ */
-
-medicineSchema.virtual("autoReorderQty").get(function(){
-
-  if(this.stock >= this.minStock)
-    return 0;
-
-  return this.minStock + 20 - this.stock;
-
-});
-
-
-
-/* ===============================
-   DAYS UNTIL STOCKOUT
-================================ */
-
-medicineSchema.virtual("daysUntilStockout").get(function(){
-
-  const dailyUsage = this.demand30 / 30;
-
-  if(dailyUsage === 0)
-    return "∞";
-
-  return Math.floor(this.stock / dailyUsage);
-
-});
-
-medicineSchema.virtual("price").get(function(){
-  return this.sellingPrice;
-});
-
 medicineSchema.pre("save", function () {
-  if (this.name) {
-    this.normalizedName = this.name
+  if (this.description) {
+    this.normalizedName = this.description
       .toLowerCase()
       .replace(/\s+/g, " ")
       .trim();
   }
 });
 
-/* ===============================
-   PROFIT MARGIN
-================================ */
-
-medicineSchema.virtual("profitPerUnit").get(function(){
-  return (this.sellingPrice || 0) - (this.costPrice || 0);
-});
-
-medicineSchema.virtual("profitMargin").get(function(){
-  if(!this.sellingPrice) return 0;
-  return Math.round(((this.sellingPrice - (this.costPrice || 0)) / this.sellingPrice) * 100);
-});
-
-
 /* ── INDEXES for fast queries at scale ── */
-medicineSchema.index({ name: 1 });
+medicineSchema.index({ description: 1 });
+medicineSchema.index({ mfr: 1 });
+medicineSchema.index({ hsnCode: 1 });
 medicineSchema.index({ status: 1 });
-medicineSchema.index({ expiry: 1 });
-medicineSchema.index({ stock: 1, minStock: 1 });
 
-medicineSchema.set("toJSON",{ virtuals:true });
-medicineSchema.set("toObject",{ virtuals:true });
+medicineSchema.set("toJSON", { virtuals: true });
+medicineSchema.set("toObject", { virtuals: true });
 
 module.exports = mongoose.model("Medicine", medicineSchema);
