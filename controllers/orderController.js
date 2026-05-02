@@ -229,18 +229,30 @@ exports.createOrder = async (req, res) => {
         }
       }
 
-      // 🔥 CALCULATE TOTAL
+      // 🔥 CALCULATE TOTAL (use frontend values if provided, otherwise calculate from database)
       serverSubtotal = items.reduce((sum, item) => {
+        // Use frontend subtotal if provided (already calculated as netValue × qty × duration)
+        if (item.subtotal !== undefined && item.subtotal !== null) {
+          return sum + Number(item.subtotal);
+        }
+        // Fallback: calculate from database values
         const med = medMap[item.medicineId.toString()];
         const price = Number(med.newMrp || 0);
-        return sum + item.qty * price;
+        const duration = item.duration || 1;
+        return sum + item.qty * price * duration;
       }, 0);
 
       serverGst = items.reduce((sum, item) => {
+        // Use frontend GST values if provided
+        if (item.cgst !== undefined && item.sgst !== undefined) {
+          return sum + Number(item.cgst) + Number(item.sgst);
+        }
+        // Fallback: calculate from database values
         const med = medMap[item.medicineId.toString()];
         const price = Number(med.newMrp || 0);
         const pct = med.gstPercent || 5;
-        return sum + (item.qty * price * pct) / 100;
+        const duration = item.duration || 1;
+        return sum + (item.qty * price * duration * pct) / 100;
       }, 0);
       serverGst = Math.round(serverGst * 100) / 100;
 
@@ -288,30 +300,37 @@ exports.createOrder = async (req, res) => {
       totalAmount: serverTotal,
       items: (items || []).map((item) => {
         const med = medMap[item.medicineId.toString()];
-        const price = Number(med.newMrp || 0);
+        // Use frontend values if provided (from Order Summary), otherwise use database values
+        const price = item.netValue !== undefined ? Number(item.netValue) : Number(med.newMrp || 0);
+        const duration = item.duration || 1;
+        const subtotal = item.subtotal !== undefined ? Number(item.subtotal) : (item.qty * price * duration);
+        const gstPercent = item.gstPercent !== undefined ? item.gstPercent : (med.gstPercent || 5);
 
         return {
           medicineId: item.medicineId,
-          name: med.description || "",
-          description: med.description || "",
-          mfr: med.mfr || "",
-          category: med.category || "",
-          pack: med.pack || "",
-          batchNo: med.batchNo || "",
+          name: item.description || med.description || item.name || "",
+          description: item.description || med.description || "",
+          mfr: item.mfr || med.mfr || "",
+          pack: item.pack || med.pack || "",
+          batchNo: item.batchNo || med.batchNo || "",
           expDate: med.expDate || "",
           oldMrp: med.oldMrp || 0,
           discPercent: med.discPercent || 0,
           free: med.free || 0,
           scmDisc: med.scmDisc || 0,
           taxableValue: med.taxableValue || 0,
-          gstPercent: med.gstPercent || 5,
-          netValue: med.netValue || 0,
-          hsnCode: med.hsnCode || "",
+          gstPercent: gstPercent,
+          netValue: price,
+          hsnCode: item.hsnCode || med.hsnCode || "",
           qty: item.qty,
-          price,
-          duration: item.duration || 0,
-          freq: item.freq || { m: 0, a: 0, n: 0 },
-          subtotal: item.qty * price,
+          price: price,
+          duration: duration,
+          frequency: item.frequency || item.freqLabel || "",
+          basePrice: item.basePrice || 0,
+          gstAmount: item.gstAmount || 0,
+          cgst: item.cgst || 0,
+          sgst: item.sgst || 0,
+          subtotal: Math.round(subtotal * 100) / 100,
         };
       }),
 

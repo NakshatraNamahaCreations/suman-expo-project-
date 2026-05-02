@@ -81,8 +81,13 @@ const orderSchema = new mongoose.Schema(
           ref: "Medicine",
         },
 
-        /* CORE FIELDS */
-        itemName: {
+        /* CORE FIELDS - from Order Summary */
+        name: {
+          type: String,
+          default: ""
+        },
+
+        description: {
           type: String,
           default: ""
         },
@@ -97,15 +102,25 @@ const orderSchema = new mongoose.Schema(
           required: true,
         },
 
+        netValue: {
+          type: Number,
+          default: 0
+        },
+
         subtotal: {
           type: Number,
           default: 0,
         },
 
-        /* DOSAGE */
+        /* DOSAGE & DURATION */
         duration: {
           type: Number,
           default: 0,
+        },
+
+        frequency: {
+          type: String,
+          default: ""
         },
 
         freq: {
@@ -114,18 +129,39 @@ const orderSchema = new mongoose.Schema(
           n: { type: Number, default: 0 },
         },
 
+        /* GST BREAKDOWN */
+        gstPercent: {
+          type: Number,
+          default: 5
+        },
+
+        basePrice: {
+          type: Number,
+          default: 0
+        },
+
+        gstAmount: {
+          type: Number,
+          default: 0
+        },
+
+        cgst: {
+          type: Number,
+          default: 0
+        },
+
+        sgst: {
+          type: Number,
+          default: 0
+        },
+
         /* MEDICINE SNAPSHOT FIELDS */
-        mfCode: {
+        mfr: {
           type: String,
           default: ""
         },
 
-        mfacName: {
-          type: String,
-          default: ""
-        },
-
-        itemCode: {
+        pack: {
           type: String,
           default: ""
         },
@@ -145,32 +181,27 @@ const orderSchema = new mongoose.Schema(
           default: ""
         },
 
-        packOf: {
-          type: String,
-          default: ""
-        },
-
-        oldMrpPrice: {
+        oldMrp: {
           type: Number,
           default: 0
         },
 
-        discount: {
+        discPercent: {
           type: Number,
           default: 0
         },
 
-        withoutTax: {
+        free: {
           type: Number,
           default: 0
         },
 
-        gstPercent: {
+        scmDisc: {
           type: Number,
-          default: 5
+          default: 0
         },
 
-        netValue: {
+        taxableValue: {
           type: Number,
           default: 0
         }
