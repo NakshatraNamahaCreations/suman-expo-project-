@@ -364,7 +364,7 @@ exports.extractMedicines = async (req, res) => {
       console.log(`   Sample medicines: ${dbMedicines.slice(0, 10).map(m => m.name).join(", ")}${dbMedicines.length > 10 ? "..." : ""}`);
     }
 
-    // ── Helper: Match medicine names to DB ──
+    // ── Helper: Match medicine names to DB (using description field) ──
     const findDBMatch = (medName) => {
       const search = medName.toLowerCase().replace(/\s+/g, "");
       if (search.length < 3) {
@@ -373,10 +373,10 @@ exports.extractMedicines = async (req, res) => {
       }
 
       const matches = dbMedicines.filter((dbMed) => {
-        const dbBase = dbMed.description.toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").replace(/\s+/g, "");
-        const isMatch = dbBase.includes(search) || search.includes(dbBase);
+        const dbDesc = (dbMed.description || dbMed.name || "").toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").replace(/\s+/g, "");
+        const isMatch = dbDesc.includes(search) || search.includes(dbDesc);
         if (isMatch) {
-          console.log(`✅ Matched: "${medName}" → "${dbMed.description}" (search="${search}", dbBase="${dbBase}")`);
+          console.log(`✅ Matched: "${medName}" → "${dbMed.description || dbMed.name}" (search="${search}", dbDesc="${dbDesc}")`);
         }
         return isMatch;
       });
@@ -384,22 +384,27 @@ exports.extractMedicines = async (req, res) => {
       if (matches.length === 0) {
         console.log(`❌ No match for: "${medName}" (search="${search}")`);
         // Log top 5 database medicines for comparison
-        console.log(`   Available medicines (first 5): ${dbMedicines.slice(0, 5).map(m => m.description).join(", ")}`);
+        console.log(`   Available medicines (first 5): ${dbMedicines.slice(0, 5).map(m => m.description || m.name).join(", ")}`);
       }
 
       return matches[0] || null;
     };
 
-    // ── Helper: Build matched medicine object ──
+    // ── Helper: Build matched medicine object (using new schema) ──
     const buildMedicineObj = (name, dbMatch, freq, duration) => {
       const daily = freq.m + freq.a + freq.n;
       const qty = daily * duration;
-      const price = dbMatch ? (dbMatch.newMrp || dbMatch.price || 0) : 0;
-      const stock = dbMatch?.qty || 0;
+      const price = dbMatch ? (dbMatch.newMrp || dbMatch.sellingPrice || dbMatch.price || 0) : 0;
+      const stock = dbMatch?.qty ?? dbMatch?.stock ?? 0;
       return {
         medicineId: dbMatch?._id || null,
-        description: dbMatch?.description || name,
-        pack: dbMatch?.pack || "",
+        name: dbMatch?.description || dbMatch?.name || name,
+        description: dbMatch?.description || dbMatch?.name || name,
+        mfr: dbMatch?.mfr || "",
+        pack: dbMatch?.pack || dbMatch?.unit || "",
+        batchNo: dbMatch?.batchNo || "",
+        hsnCode: dbMatch?.hsnCode || "",
+        gstPercent: dbMatch?.gstPercent || 5,
         dosage: "",
         freq,
         freqLabel: `${freq.m}-${freq.a}-${freq.n}`,
@@ -412,14 +417,23 @@ exports.extractMedicines = async (req, res) => {
       };
     };
 
-    // ── EXCEL EXTRACTION ──
-    if (mimetype.includes("spreadsheet") || mimetype.includes("excel")) {
-      fileType = "excel";
-      console.log("📊 Processing as EXCEL file");
+    // ── EXCEL & CSV EXTRACTION ──
+    if (mimetype.includes("spreadsheet") || mimetype.includes("excel") || mimetype.includes("csv") || filePath.endsWith(".csv")) {
+      fileType = mimetype.includes("csv") || filePath.endsWith(".csv") ? "csv" : "excel";
+      console.log(`📊 Processing as ${fileType.toUpperCase()} file`);
       try {
-        const wb = XLSX.readFile(filePath);
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
+        let rows = [];
+        if (mimetype.includes("csv") || filePath.endsWith(".csv")) {
+          // Parse CSV file
+          const csvText = fs.readFileSync(filePath, "utf-8");
+          const lines = csvText.trim().split("\n");
+          rows = lines.map(line => line.split(",").map(cell => cell.trim()));
+        } else {
+          // Parse Excel file
+          const wb = XLSX.readFile(filePath);
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
+        }
 
         // Find medicine name column (auto-detect header)
         const headers = (rows[0] || []).map(h => String(h || "").toLowerCase().trim());
@@ -438,9 +452,10 @@ exports.extractMedicines = async (req, res) => {
         const addedNames = new Set();
         for (const medName of medNames) {
           const dbMatch = findDBMatch(medName);
-          if (!dbMatch || addedNames.has(dbMatch.name.toLowerCase())) continue;
+          const medDescKey = (dbMatch?.description || dbMatch?.name || "").toLowerCase();
+          if (!dbMatch || addedNames.has(medDescKey)) continue;
 
-          addedNames.add(dbMatch.description.toLowerCase());
+          addedNames.add(medDescKey);
           matchedMeds.push(buildMedicineObj(medName, dbMatch, { m: 1, a: 0, n: 1 }, 5));
         }
       } catch (err) {
@@ -474,12 +489,13 @@ exports.extractMedicines = async (req, res) => {
       for (const parsedMed of parsed.medicines) {
         console.log(`   📋 Parsed medicine: "${parsedMed.name}" ${parsedMed.dosage || ""} ${parsedMed.freqLabel} ${parsedMed.duration}d qty:${parsedMed.qty}`);
         const dbMatch = findDBMatch(parsedMed.name);
-        if (addedNames.has((dbMatch?.name || parsedMed.name).toLowerCase())) {
+        const medDescKey = (dbMatch?.description || dbMatch?.name || parsedMed.name).toLowerCase();
+        if (addedNames.has(medDescKey)) {
           console.log(`   ⏭️  Already added, skipping`);
           continue;
         }
 
-        addedNames.add((dbMatch?.name || parsedMed.name).toLowerCase());
+        addedNames.add(medDescKey);
         matchedMeds.push(buildMedicineObj(parsedMed.name, dbMatch, parsedMed.freq || { m: 1, a: 0, n: 1 }, parsedMed.duration || 5));
         console.log(`   ✅ Added to matchedMeds${dbMatch ? ` (DB ID: ${dbMatch._id})` : " (no DB match)"}`);
       }
@@ -487,10 +503,11 @@ exports.extractMedicines = async (req, res) => {
       // Fallback: scan full text for more medicines
       if (matchedMeds.length === 0 && text) {
         for (const med of dbMedicines) {
-          const baseName = med.name.toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").trim();
-          if (baseName.length >= 4 && text.includes(baseName) && !addedNames.has(med.name.toLowerCase())) {
-            addedNames.add(med.name.toLowerCase());
-            matchedMeds.push(buildMedicineObj(med.name, med, { m: 1, a: 0, n: 1 }, 5));
+          const baseName = (med.description || med.name || "").toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").trim();
+          const medDescKey = (med.description || med.name || "").toLowerCase();
+          if (baseName.length >= 4 && text.includes(baseName) && !addedNames.has(medDescKey)) {
+            addedNames.add(medDescKey);
+            matchedMeds.push(buildMedicineObj(med.description || med.name, med, { m: 1, a: 0, n: 1 }, 5));
           }
         }
       }
@@ -521,12 +538,13 @@ exports.extractMedicines = async (req, res) => {
       for (const parsedMed of parsed.medicines) {
         console.log(`   📋 Parsed medicine: "${parsedMed.name}" ${parsedMed.dosage || ""} ${parsedMed.freqLabel} ${parsedMed.duration}d qty:${parsedMed.qty}`);
         const dbMatch = findDBMatch(parsedMed.name);
-        if (addedNames.has((dbMatch?.name || parsedMed.name).toLowerCase())) {
+        const medDescKey = (dbMatch?.description || dbMatch?.name || parsedMed.name).toLowerCase();
+        if (addedNames.has(medDescKey)) {
           console.log(`   ⏭️  Already added, skipping`);
           continue;
         }
 
-        addedNames.add((dbMatch?.name || parsedMed.name).toLowerCase());
+        addedNames.add(medDescKey);
         matchedMeds.push(buildMedicineObj(parsedMed.name, dbMatch, parsedMed.freq || { m: 1, a: 0, n: 1 }, parsedMed.duration || 5));
         console.log(`   ✅ Added to matchedMeds${dbMatch ? ` (DB ID: ${dbMatch._id})` : " (no DB match)"}`);
       }
@@ -534,10 +552,11 @@ exports.extractMedicines = async (req, res) => {
       // Fallback: scan full text
       if (matchedMeds.length === 0 && text) {
         for (const med of dbMedicines) {
-          const baseName = med.name.toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").trim();
-          if (baseName.length >= 4 && text.includes(baseName) && !addedNames.has(med.name.toLowerCase())) {
-            addedNames.add(med.name.toLowerCase());
-            matchedMeds.push(buildMedicineObj(med.name, med, { m: 1, a: 0, n: 1 }, 5));
+          const baseName = (med.description || med.name || "").toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").trim();
+          const medDescKey = (med.description || med.name || "").toLowerCase();
+          if (baseName.length >= 4 && text.includes(baseName) && !addedNames.has(medDescKey)) {
+            addedNames.add(medDescKey);
+            matchedMeds.push(buildMedicineObj(med.description || med.name, med, { m: 1, a: 0, n: 1 }, 5));
           }
         }
       }
