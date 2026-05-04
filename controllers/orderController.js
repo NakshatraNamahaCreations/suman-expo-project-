@@ -211,7 +211,7 @@ exports.createOrder = async (req, res) => {
         medMap[m._id.toString()] = m;
       });
 
-      // ✅ VALIDATE STOCK + EXISTENCE
+      // ✅ VALIDATE MEDICINE EXISTENCE (but allow orders even if stock is 0)
       for (const item of items) {
         const med = medMap[item.medicineId.toString()];
 
@@ -221,16 +221,10 @@ exports.createOrder = async (req, res) => {
             message: "Medicine not found",
           });
         }
-
-        if (med.qty < item.qty) {
-          return res.status(400).json({
-            success: false,
-            message: `${med.description || med.name} only has ${med.qty} in stock`,
-          });
-        }
       }
       // ✅ NO CALCULATION: Frontend Order Summary values are already correct
-      // Backend only validates stock and stores received values
+      // Backend only validates medicine existence and stores received values
+      // Stock can be 0 or negative - orders are allowed regardless of stock availability
     }
 
     // ✅ GET ADDRESS
