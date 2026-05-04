@@ -54,6 +54,24 @@ const patientDetailsSchema = new mongoose.Schema(
     default: "myself"
   },
 
+  relationship: {
+    type: String,
+    enum: [
+      "Spouse",
+      "Parent",
+      "Child",
+      "Sibling",
+      "Grandparent",
+      "Grandchild",
+      "Aunt/Uncle",
+      "Niece/Nephew",
+      "Cousin",
+      "In-law",
+      "Friend",
+      "Other"
+    ]
+  },
+
   isActive: {
   type: Boolean,
   default: true
