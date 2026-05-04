@@ -79,7 +79,7 @@ exports.getTicketById = async (req, res) => {
 // ============================
 exports.createTicket = async (req, res) => {
   try {
-    const { userId, customerName, customerPhone, customerEmail, subject, category, priority, description, orderId } = req.body;
+    const { userId, customerName, customerPhone, customerEmail, subject, category, priority, description, orderId, orderDetails } = req.body;
 
     if (!customerName || !subject || !description) {
       return res.status(400).json({ success: false, message: "Missing required fields" });
@@ -89,6 +89,7 @@ exports.createTicket = async (req, res) => {
       ticketId: "TKT-" + Date.now(),
       userId, customerName, customerPhone, customerEmail,
       subject, category, priority, description, orderId,
+      ...(orderDetails && { orderDetails }),
     });
 
     res.status(201).json({ success: true, message: "Ticket created successfully", data: ticket });

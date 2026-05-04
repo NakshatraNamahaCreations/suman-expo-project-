@@ -34,6 +34,18 @@ router.get("/billing", getBillingTable);
 // GET ALL ORDERS
 router.get("/", getOrders);
 
+// GET USER'S ORDERS (before /:id to avoid shadowing)
+router.get("/user/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const Order = require("../models/Order");
+    const orders = await Order.find({ userId }).sort({ createdAt: -1 });
+    res.json({ success: true, data: orders });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to fetch orders", error: err.message });
+  }
+});
+
 // REORDER: Create new order from existing order (before /:id to avoid shadowing)
 router.post("/:id/reorder", reorderOrder);
 

@@ -72,6 +72,13 @@ const ticketSchema = new mongoose.Schema({
     type: String,
   },
 
+  orderDetails: {
+    orderId: String,
+    patientName: String,
+    totalAmount: Number,
+    orderStatus: String,
+  },
+
   assignedTo: {
     type: String,
     default: "",
