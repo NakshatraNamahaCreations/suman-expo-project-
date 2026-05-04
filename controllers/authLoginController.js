@@ -67,7 +67,11 @@ exports.sendOTP = async (req, res) => {
       success: true,
       message: "OTP sent successfully",
       phone,
-      otp: process.env.NODE_ENV === "development" ? otp : undefined, // Dev only
+      otp: {
+        code: otp,
+        createdAt: new Date(),
+        expiresAt,
+      },
     });
   } catch (err) {
     console.error("Send OTP error:", err);
