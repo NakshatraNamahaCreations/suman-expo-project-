@@ -299,6 +299,8 @@ exports.createOrder = async (req, res) => {
       patientDetails: {
         patientId: patient.patientId,
         name: patient.name,
+        age: patient.age || null,
+        email: patient.email || "",
         phone: patient.primaryPhone,
         secondaryPhone: patient.secondaryPhone || "",
         gender: patient.gender,
