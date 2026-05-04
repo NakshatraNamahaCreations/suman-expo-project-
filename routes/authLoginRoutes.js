@@ -7,6 +7,7 @@ const {
   updateUserName,
   logout,
   getAllLoginUsers,
+  adminCreateUser,
 } = require("../controllers/authLoginController");
 const { authMiddleware } = require("../middleware/auth");
 
@@ -77,5 +78,14 @@ router.post("/logout", authMiddleware, logout);
  * Response: { success: true, data: [{ phone, name, lastLogin, ... }] }
  */
 router.get("/all-users", getAllLoginUsers);
+
+/**
+ * POST /api/auth-login/admin-create
+ * Create a new login user (Admin only, no OTP required)
+ *
+ * Request: { phone: "9876543210", name: "John Doe" (optional) }
+ * Response: { success: true, message: "...", data: { _id, phone, name, ... } }
+ */
+router.post("/admin-create", adminCreateUser);
 
 module.exports = router;

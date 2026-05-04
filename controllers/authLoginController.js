@@ -307,3 +307,56 @@ exports.getAllLoginUsers = async (req, res) => {
     });
   }
 };
+
+/* ════════════════════════════════════════════════════
+   ADMIN: CREATE LOGIN USER (without OTP)
+════════════════════════════════════════════════════ */
+exports.adminCreateUser = async (req, res) => {
+  try {
+    const { phone, name } = req.body;
+
+    if (!phone) {
+      return res.status(400).json({
+        success: false,
+        message: "Phone number is required",
+      });
+    }
+
+    if (!/^\d{10}$/.test(phone)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid phone number. Must be 10 digits.",
+      });
+    }
+
+    let user = await LoginUser.findOne({ phone });
+
+    if (user) {
+      return res.status(409).json({
+        success: false,
+        message: "User already exists with this phone",
+        data: user,
+      });
+    }
+
+    user = await LoginUser.create({
+      phone,
+      name: name || null,
+      isPhoneVerified: false,
+      status: "active",
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "User created successfully",
+      data: user,
+    });
+  } catch (err) {
+    console.error("Admin create user error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to create user",
+      error: err.message,
+    });
+  }
+};
