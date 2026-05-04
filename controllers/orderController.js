@@ -939,14 +939,6 @@ exports.reorderOrder = async (req, res) => {
         continue;
       }
 
-      // Check stock
-      if (med.qty < item.qty) {
-        return res.status(400).json({
-          success: false,
-          message: `${med.description || med.name} is out of stock (available: ${med.qty}, requested: ${item.qty})`,
-        });
-      }
-
       const itemPrice = med.newMrp || 0;
       const itemSubtotal = itemPrice * item.qty;
       subtotal += itemSubtotal;
