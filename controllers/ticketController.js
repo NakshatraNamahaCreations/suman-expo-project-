@@ -17,9 +17,15 @@ function paginate(query) {
 exports.getTickets = async (req, res) => {
   try {
     const { page, limit, skip, all } = paginate(req.query);
-    const { status, priority, category, search, from, to } = req.query;
+    const { status, priority, category, search, from, to, userId } = req.query;
 
     const filter = {};
+
+    // Filter by userId if provided (logged-in user's tickets only)
+    if (userId) {
+      filter.userId = userId;
+    }
+
     if (status) filter.status = status;
     if (priority) filter.priority = priority;
     if (category) filter.category = category;
