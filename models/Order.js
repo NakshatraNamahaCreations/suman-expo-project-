@@ -40,6 +40,8 @@ const orderSchema = new mongoose.Schema(
     patientDetails: {
       patientId: String,
       name: String,
+      age: Number,
+      email: String,
       phone: String,
       secondaryPhone: String,
       gender: String,
