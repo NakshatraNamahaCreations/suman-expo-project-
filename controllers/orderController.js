@@ -750,8 +750,11 @@ exports.createAdminOrder = async (req, res) => {
       totalAmount: total,
       patientDetails: {
         name: patient.name,
-        patientId: patient.patientId, // ✅ ADD THIS
+        patientId: patient.patientId,
+        age: patient.age || null,
+        email: patient.email || "",
         phone: patient.primaryPhone,
+        secondaryPhone: patient.secondaryPhone || "",
         gender: patient.gender || "",
         orderingFor: "admin",
       },
