@@ -101,7 +101,7 @@ router.get("/:id/invoice-pdf", async (req, res) => {
       .text("RG Medlink", { align: "center" });
 
     doc.fontSize(10).font("Helvetica").fillColor("#666")
-      .text("Your Health, Delivered", { align: "center" });
+      .text("Medicines Made Easy & Accessible", { align: "center" });
 
     doc.moveDown(0.5);
     doc.moveTo(50, doc.y).lineTo(545, doc.y).strokeColor("#E2E8F0").stroke();

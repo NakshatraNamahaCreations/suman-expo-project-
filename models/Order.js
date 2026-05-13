@@ -286,9 +286,18 @@ orderSchema.index({ createdAt: -1 });
 orderSchema.index({ "patientDetails.name": 1 });
 
 /* ── AUTO GENERATE IDS ── */
+function generateOrderId() {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let result = "CX-";
+  for (let i = 0; i < 8; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
 orderSchema.pre("save", function () {
   if (!this.orderId) {
-    this.orderId = "ORD-" + Date.now();
+    this.orderId = generateOrderId();
   }
 
   if (!this.invoiceNumber) {
