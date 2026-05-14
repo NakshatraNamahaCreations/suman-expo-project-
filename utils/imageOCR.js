@@ -261,7 +261,7 @@ function parsePrescriptionText(text) {
 
         // Clean name
         name = name.replace(/(\d+\.?\d*\s*(?:mg|ml|mcg|gm?|iu))/gi, "").trim();
-        name = name.replace(/^(tablet|capsule|syrup|injection|tab|cap|syp|syr|inj)\b\.?\s*/i, "").trim();
+        name = name.replace(/^(tablet|capsule|syrup|injection|tab|cap|syp|syr|inj|oint|cream|drops?|susp|gel)\b\.?\s*/i, "").trim();
         name = name.replace(/[^a-zA-Z0-9\s\-]/g, " ").replace(/\s+/g, " ").trim();
 
         if (!name || name.length < 3) continue;
