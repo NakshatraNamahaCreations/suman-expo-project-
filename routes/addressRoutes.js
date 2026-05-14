@@ -8,11 +8,15 @@ const {
   getUserAddresses,
   updateAddress,
   deleteAddress,
-  getDefaultAddress
+  getDefaultAddress,
+  reverseGeocode
 } = require("../controllers/addressController");
 
 /* DELETE SINGLE */
 router.delete("/delete/:id", deleteAddress);
+
+/* REVERSE GEOCODE */
+router.post("/reverse-geocode", reverseGeocode);
 
 /* CREATE */
 router.post("/save", saveAddress);
