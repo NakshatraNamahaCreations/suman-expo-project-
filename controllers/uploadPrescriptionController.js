@@ -7,7 +7,7 @@
   const generateStyledPDF = require("../utils/generateStyledPDF");
   const { extractTextFromImage, parsePrescriptionText } = require("../utils/imageOCR");
 
-  // Smart medicine matcher factory — multi-strategy approach
+  // Smart medicine matcher factory — searches description, mfr, and normalizedName
   function buildMatcher(dbMedicines) {
     return function findDBMatch(medName) {
       if (!medName || medName.trim().length < 3) return null;
@@ -15,29 +15,55 @@
       const searchLower = medName.toLowerCase().trim();
       const searchTokens = searchLower.split(/\s+/).filter(t => t.length >= 3);
 
-      // Strategy 1: exact case-insensitive match
-      const exact = dbMedicines.find(d => (d.description || "").toLowerCase() === searchLower);
-      if (exact) return exact;
+      // Fields to search: description (main), mfr (brand/manufacturer), normalizedName
+      const getSearchFields = (dbMed) => [
+        dbMed.description || "",
+        dbMed.mfr || "",
+        dbMed.normalizedName || ""
+      ];
 
-      // Strategy 2: token overlap scoring
-      if (searchTokens.length >= 2) {
-        let bestMatch = null;
-        let bestScore = 0;
-        for (const dbMed of dbMedicines) {
-          const desc = (dbMed.description || "").toLowerCase();
-          const hits = searchTokens.filter(t => desc.includes(t)).length;
-          const score = hits / searchTokens.length;
-          if (score > bestScore) { bestScore = score; bestMatch = dbMed; }
+      // Find best match across all strategies
+      let bestMatch = null;
+      let bestScore = 0;
+
+      for (const dbMed of dbMedicines) {
+        const fields = getSearchFields(dbMed);
+
+        for (const field of fields) {
+          const fieldLower = field.toLowerCase();
+          if (!fieldLower) continue;
+
+          // Strategy 1: Exact field match (highest priority)
+          if (fieldLower === searchLower) {
+            return dbMed;
+          }
+
+          // Strategy 2: Token overlap scoring
+          if (searchTokens.length >= 1) {
+            const hits = searchTokens.filter(t => fieldLower.includes(t)).length;
+            const score = hits / Math.max(searchTokens.length, 1);
+            if (score > bestScore) {
+              bestScore = score;
+              bestMatch = dbMed;
+            }
+          }
         }
-        if (bestScore >= 0.6 && bestMatch) return bestMatch;
       }
 
-      // Strategy 3: stripped substring fallback
+      // Return best token match if score >= 0.5 (50%+ tokens match)
+      if (bestScore >= 0.5 && bestMatch) return bestMatch;
+
+      // Strategy 3: Substring match (with strength stripping)
       const stripped = searchLower.replace(/\s+/g, "");
       return dbMedicines.find(dbMed => {
-        const dbDesc = (dbMed.description || "").toLowerCase()
-          .replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").replace(/\s+/g, "");
-        return dbDesc.includes(stripped) || stripped.includes(dbDesc);
+        const fields = getSearchFields(dbMed);
+        return fields.some(field => {
+          const fieldStripped = field.toLowerCase()
+            .replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "")
+            .replace(/\s+/g, "");
+          return (fieldStripped && stripped &&
+                  (fieldStripped.includes(stripped) || stripped.includes(fieldStripped)));
+        });
       }) || null;
     };
   }
