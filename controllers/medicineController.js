@@ -98,6 +98,7 @@ exports.uploadMedicinesExcel = async (req, res) => {
     // ✅ FIELD MAPPING: Excel columns to database fields
     const fieldMappings = {
       mfr: ['mfr', 'manufacturer', 'mfac name'],
+      vendor: ['vendor', 'vendor name', 'supplier', 'supplier name'],
       description: ['description', 'product name', 'medicine name', 'name', 'item name'],
       category: ['category', 'type'],
       qty: ['qty', 'quantity', 'stock', 'qnty'],
@@ -137,6 +138,7 @@ exports.uploadMedicinesExcel = async (req, res) => {
 
       // ✅ EXTRACT ALL FIELDS USING MAPPINGS
       const mfr = findField(r, ...fieldMappings.mfr) || "";
+      const vendor = findField(r, ...fieldMappings.vendor) || "";
       const category = findField(r, ...fieldMappings.category) || "";
       const batchNo = findField(r, ...fieldMappings.batchNo) || "";
       const expDate = findField(r, ...fieldMappings.expDate) || "";
@@ -156,6 +158,7 @@ exports.uploadMedicinesExcel = async (req, res) => {
 
       const payload = {
         mfr,
+        vendor,
         description,
         category,
         batchNo,

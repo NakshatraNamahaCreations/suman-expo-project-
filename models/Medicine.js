@@ -8,6 +8,13 @@ const medicineSchema = new mongoose.Schema(
       default: ""
     },
 
+    vendor: {
+      type: String,
+      default: "",
+      trim: true,
+      index: true
+    },
+
     description: {
       type: String,
       required: true,
