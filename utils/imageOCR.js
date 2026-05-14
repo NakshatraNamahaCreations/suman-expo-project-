@@ -353,8 +353,8 @@ function parsePrescriptionText(text) {
   const dosageRegex = /(\d+\.?\d*\s*(?:mg|ml|mcg|gm?|iu|%|units?))/i;
   const lineNumRegex = /^\s*(?:\d+[.):\-]\s*|[-•*]\s*|[ivx]+[.)]\s*|rx?\s*\d*[:.)\s]*)/i;
 
-  // Skip patterns
-  const skipRegex = /\b(doctor|dr\.|clinic|hospital|phone|tel|mobile|email|address|reg\s*no|date|patient\s*name|age\/sex|sex|gender|weight|height|bp|pulse|diagnosis|chief\s*complaint|signature|stamp|pharmacist|dispense|valid|follow\s*up|review|next\s*visit|advice)\b/i;
+  // Skip patterns — filters out header, credentials, clinic info
+  const skipRegex = /\b(doctor|dr\.|clinic|hospital|phone|tel|mobile|email|address|reg\s*no|date|patient\s*name|age\/sex|sex|gender|weight|height|bp|pulse|diagnosis|chief\s*complaint|signature|stamp|pharmacist|dispense|valid|follow\s*up|review|next\s*visit|advice|mbbs|md|dm|pgc|fcep|fci|fccm|bds|bhms|bams|dnb|ms|mch|pgdm|consultant|director|senior|head|resident|professor|qualification|qualified|credential|license|registration|practice|hospital|nursing|care|medical|centre|center|institute|department|speciality|specialty|experience|years)\b/i;
 
   // Known medicine names (common Indian medicines) — helps detect even without prefix
   const knownMeds = [
@@ -526,12 +526,24 @@ function parsePrescriptionText(text) {
         name = fixedName;
       }
 
-      // Validate
+      // Validate - ensure it looks like a medicine, not a title/credential
       const words = name.split(/\s+/).filter((w) => w.length > 0);
       const hasRealWord = words.some((w) => w.length >= 3 && /^[a-zA-Z]/.test(w));
       if (!hasRealWord && !hasKnownMed) continue;
+
+      // Filter out lines that are all short words (like "MBBS MD DM" or "Senior Consultant")
       const tinyWords = words.filter((w) => w.length <= 2).length;
       if (tinyWords > words.length * 0.5 && !hasKnownMed) continue;
+
+      // Additional filter: reject if line is mostly all-caps acronyms (like credentials)
+      // e.g., "MBBS MD DM PGCUSA FCEPJAPAN" should be rejected
+      const allCapsAcronyms = words.filter((w) => /^[A-Z]{2,}$/.test(w)).length;
+      if (allCapsAcronyms > words.length * 0.6 && !hasKnownMed) continue;
+
+      // Reject lines that look like titles/positions (contain common title words)
+      const titleWords = ["director", "consultant", "senior", "head", "resident", "professor", "doctor"];
+      const hasTitleWord = titleWords.some(t => lower.includes(t));
+      if (hasTitleWord && !hasKnownMed && !hasMedPrefix) continue;
 
       // Capitalize
       name = words.map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(" ");

@@ -407,7 +407,9 @@ exports.extractMedicines = async (req, res) => {
     const dbMedicines = await Medicine.find({ status: "Active" });
     console.log(`📚 Loaded ${dbMedicines.length} medicines from database`);
     if (dbMedicines.length > 0) {
-      console.log(`   Sample medicines: ${dbMedicines.slice(0, 10).map(m => m.name).join(", ")}${dbMedicines.length > 10 ? "..." : ""}`);
+      console.log(`   Sample medicines: ${dbMedicines.slice(0, 10).map(m => m.description).join(", ")}${dbMedicines.length > 10 ? "..." : ""}`);
+    } else {
+      console.log(`   ⚠️  WARNING: No active medicines in database!`);
     }
 
     // ── Helper: Match medicine names to DB (using description field ONLY) ──
@@ -602,7 +604,24 @@ exports.extractMedicines = async (req, res) => {
 
     // Only keep medicines that matched the database
     const validMeds = matchedMeds.filter(m => m.medicineId);
-    console.log(`✅ Found ${validMeds.length} matched medicines from ${matchedMeds.length} total medicines`);
+    const unmatchedMeds = matchedMeds.filter(m => !m.medicineId);
+
+    console.log(`\n📊 EXTRACTION SUMMARY:`);
+    console.log(`   Total extracted from file: ${matchedMeds.length}`);
+    console.log(`   ✅ Matched to inventory: ${validMeds.length}`);
+    console.log(`   ❌ Not in inventory: ${unmatchedMeds.length}`);
+
+    if (unmatchedMeds.length > 0) {
+      console.log(`\n   Unmatched medicines (ADD THESE TO INVENTORY):`);
+      unmatchedMeds.forEach((m, i) => {
+        console.log(`      ${i+1}. "${m.name}" ${m.dosage || ""}`);
+      });
+    }
+
+    console.log(`\n   ✅ Matched medicines ready for order:`);
+    validMeds.forEach((m, i) => {
+      console.log(`      ${i+1}. "${m.name}" - ${m.freqLabel} - ${m.duration}d - qty:${m.qty}`);
+    });
 
     const subtotal = validMeds.reduce((sum, m) => sum + m.subtotal, 0);
     const gst = Math.round(subtotal * 0.05 * 100) / 100;
@@ -621,8 +640,15 @@ exports.extractMedicines = async (req, res) => {
       success: true,
       fileType,
       message: validMeds.length > 0
-        ? `Found ${validMeds.length} medicine(s)`
-        : "File uploaded. No medicines matched in database.",
+        ? `✅ Found ${validMeds.length} medicine(s) matching your inventory`
+        : matchedMeds.length > 0
+        ? `⚠️ Extracted ${matchedMeds.length} medicine(s) from prescription, but none matched your inventory database. Please add these medicines to inventory with Status: Active.`
+        : "❌ No medicines could be extracted from the prescription file. Please check file quality or ensure it's in supported format (PDF, Image, Excel).",
+      extractedCount: matchedMeds.length,
+      matchedCount: validMeds.length,
+      unmatchedMedicines: matchedMeds
+        .filter(m => !m.medicineId)
+        .map(m => ({ name: m.name, dosage: m.dosage || "" })),
       prescription: {
         rxId: `RX-${Date.now()}`,
         doctor,
