@@ -208,75 +208,140 @@ exports.reverseGeocode = async (req, res) => {
       });
     }
 
-    // Call Google Maps Reverse Geocoding API
+    // Call Google Maps Reverse Geocoding API with high accuracy
     const response = await axios.get(
       `https://maps.googleapis.com/maps/api/geocode/json`,
       {
         params: {
           latlng: `${latitude},${longitude}`,
-          key: process.env.GOOGLE_MAPS_API_KEY
+          key: process.env.GOOGLE_MAPS_API_KEY,
+          result_type: "street_address|route|establishment" // Request detailed results
         }
       }
     );
 
     if (response.data.results && response.data.results.length > 0) {
-      const result = response.data.results[0];
+      const result = response.data.results[0]; // Most specific result
       const addressComponents = result.address_components;
+      const formattedAddress = result.formatted_address;
 
-      // Extract address components from Google's response
+      console.log("📍 Reverse Geocode Results:");
+      console.log("Full Address:", formattedAddress);
+      console.log("Address Components:", JSON.stringify(addressComponents, null, 2));
+
+      // Initialize address data with comprehensive structure
       const addressData = {
-        fullAddress: result.formatted_address,
+        fullAddress: formattedAddress,
         latitude,
         longitude,
-        street: "",
-        area: "",
-        city: "",
-        state: "",
-        country: "",
-        pincode: ""
+        street: "",           // Street number + Route
+        building: "",         // Premise/Building name
+        area: "",            // Neighborhood/Area (sublocality_level_3 or sublocality_level_2)
+        locality: "",        // Locality (sublocality_level_1)
+        city: "",            // City (locality or administrative_area_level_3)
+        district: "",        // District (administrative_area_level_2)
+        state: "",           // State (administrative_area_level_1)
+        country: "",         // Country
+        pincode: ""          // Postal code
       };
 
-      // Parse address components
+      // Extract all components with proper priority
+      let streetNumber = "";
+      let route = "";
+      let premise = "";
+      let neighborhood = "";
+      let sublocalityL4 = "";
+      let sublocalityL3 = "";
+      let sublocalityL2 = "";
+      let sublocalityL1 = "";
+      let localityCity = "";
+      let adminL3 = "";
+      let adminL2 = "";
+      let adminL1 = "";
+
+      // Parse all address components
       for (const component of addressComponents) {
         const types = component.types;
         const longName = component.long_name;
         const shortName = component.short_name;
 
-        if (types.includes('street_number')) {
-          addressData.street = longName;
-        } else if (types.includes('route') && !addressData.street) {
-          addressData.street = longName;
-        } else if (types.includes('locality')) {
-          addressData.city = longName;
+        // Street level components
+        if (types.includes('premise')) {
+          premise = longName;
+        } else if (types.includes('street_number')) {
+          streetNumber = longName;
+        } else if (types.includes('route')) {
+          route = longName;
+        } else if (types.includes('neighborhood')) {
+          neighborhood = longName;
+        }
+
+        // Sublocality levels (for Indian addresses, these are important)
+        if (types.includes('sublocality_level_4')) {
+          sublocalityL4 = longName;
+        } else if (types.includes('sublocality_level_3')) {
+          sublocalityL3 = longName;
+        } else if (types.includes('sublocality_level_2')) {
+          sublocalityL2 = longName;
+        } else if (types.includes('sublocality_level_1')) {
+          sublocalityL1 = longName;
+        } else if (types.includes('sublocality')) {
+          if (!sublocalityL2) sublocalityL2 = longName;
+        }
+
+        // City/locality
+        if (types.includes('locality')) {
+          localityCity = longName;
+        }
+
+        // Administrative areas
+        if (types.includes('administrative_area_level_3')) {
+          adminL3 = longName;
         } else if (types.includes('administrative_area_level_2')) {
-          addressData.area = longName;
+          adminL2 = longName;
         } else if (types.includes('administrative_area_level_1')) {
-          addressData.state = shortName;
+          adminL1 = shortName || longName;
+        }
+
+        // Other components
+        if (types.includes('postal_code')) {
+          addressData.pincode = longName;
         } else if (types.includes('country')) {
           addressData.country = longName;
-        } else if (types.includes('postal_code')) {
-          addressData.pincode = longName;
         }
       }
 
-      // Refine street address: combine street_number and route
-      if (!addressData.street || addressData.street.length < 3) {
-        const streetNumber = addressComponents.find(c => c.types.includes('street_number'));
-        const route = addressComponents.find(c => c.types.includes('route'));
-        if (streetNumber && route) {
-          addressData.street = `${streetNumber.long_name} ${route.long_name}`;
-        } else if (route) {
-          addressData.street = route.long_name;
-        }
-      }
+      // Build comprehensive street address (most detailed)
+      const streetParts = [];
+      if (premise) streetParts.push(premise);
+      if (streetNumber) streetParts.push(streetNumber);
+      if (route) streetParts.push(route);
+      if (neighborhood && !streetParts.includes(neighborhood)) streetParts.push(neighborhood);
 
-      // If city is empty, try to use sublocality
-      if (!addressData.city) {
-        const sublocality = addressComponents.find(c => c.types.includes('sublocality_level_1'));
-        if (sublocality) {
-          addressData.city = sublocality.long_name;
-        }
-      }
+      addressData.street = streetParts.filter(Boolean).join(", ") || route || streetNumber || premise || neighborhood || "";
+      addressData.building = premise;
+
+      // Build area/locality information (combining sublocality levels for complete area info)
+      const areaParts = [];
+      if (sublocalityL4) areaParts.push(sublocalityL4);
+      if (sublocalityL3 && !areaParts.includes(sublocalityL3)) areaParts.push(sublocalityL3);
+      if (sublocalityL2 && !areaParts.includes(sublocalityL2)) areaParts.push(sublocalityL2);
+
+      addressData.area = areaParts.filter(Boolean).join(", ") || sublocalityL3 || sublocalityL2 || neighborhood || "";
+
+      // Locality (intermediate level)
+      addressData.locality = sublocalityL1 || sublocalityL2 || localityCity || "";
+
+      // City (priority: locality > admin level 3 > sublocalityL1)
+      addressData.city = localityCity || adminL3 || sublocalityL1 || "";
+
+      // District (administrative_area_level_2)
+      addressData.district = adminL2 || "";
+
+      // State (administrative_area_level_1)
+      addressData.state = adminL1 || "";
+
+      console.log("✅ Parsed Address Data:", JSON.stringify(addressData, null, 2));
 
       res.json({
         success: true,
@@ -289,7 +354,7 @@ exports.reverseGeocode = async (req, res) => {
       });
     }
   } catch (error) {
-    console.error("Reverse geocode error:", error.message);
+    console.error("❌ Reverse geocode error:", error.message);
     res.status(500).json({
       success: false,
       message: "Failed to reverse geocode coordinates",
