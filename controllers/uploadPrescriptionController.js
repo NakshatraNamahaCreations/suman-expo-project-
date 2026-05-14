@@ -79,7 +79,8 @@
         const search = medName.toLowerCase().replace(/\s+/g, "");
         if (search.length < 3) return null;
         return dbMedicines.find((dbMed) => {
-          const dbBase = dbMed.name.toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").replace(/\s+/g, "");
+          // Use description field (schema doesn't have name field)
+          const dbBase = (dbMed.description || "").toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").replace(/\s+/g, "");
           return dbBase.includes(search) || search.includes(dbBase);
         });
       };
@@ -98,16 +99,16 @@
 
       for (const parsedMed of parsed.medicines) {
         const dbMatch = findDBMatch(parsedMed.name);
-        const price = dbMatch ? (dbMatch.sellingPrice || dbMatch.price || 0) : 0;
-        const name = dbMatch?.name || parsedMed.name;
+        const price = dbMatch ? (dbMatch.newMrp || dbMatch.price || 0) : 0;
+        const name = dbMatch?.description || parsedMed.name;
 
         addedNames.add(name.toLowerCase());
-        const stock = dbMatch?.stock ?? 0;
+        const stock = dbMatch?.qty ?? 0;
         matchedMeds.push({
           medicineId: dbMatch?._id || null,
           name,
           category: dbMatch?.category || "Tablet",
-          unit: dbMatch?.unit || "Tablet",
+          unit: dbMatch?.pack || "Tablet",
           dosage: parsedMed.dosage,
           freq: parsedMed.freq,
           freqLabel: parsedMed.freqLabel,
@@ -139,9 +140,9 @@
           : { m: 1, a: 0, n: 1, label: "1-0-1" };
 
         for (const med of dbMedicines) {
-          if (addedNames.has(med.name.toLowerCase())) continue;
+          if (addedNames.has((med.description || "").toLowerCase())) continue;
 
-          const baseName = med.name.toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").trim();
+          const baseName = (med.description || "").toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").trim();
           if (baseName.length < 3) continue;
 
           // Check if medicine name appears in OCR text
@@ -183,12 +184,12 @@
             const qty = daily * duration;
             const price = med.sellingPrice || med.price || 0;
 
-            addedNames.add(med.name.toLowerCase());
+            addedNames.add((med.description || "").toLowerCase());
             matchedMeds.push({
               medicineId: med._id,
-              name: med.name,
+              name: med.description,
               category: med.category,
-              unit: med.unit,
+              unit: med.pack,
               dosage: "",
               freq,
               freqLabel,
@@ -196,8 +197,8 @@
               qty,
               price,
               subtotal: qty * price,
-              stock: med.stock || 0,
-              inStock: (med.stock || 0) >= qty,
+              stock: med.qty || 0,
+              inStock: (med.qty || 0) >= qty,
             });
           }
         }
@@ -262,7 +263,7 @@
         const search = medName.toLowerCase().replace(/\s+/g, "");
         if (search.length < 3) return null;
         return dbMedicines.find((dbMed) => {
-          const dbBase = dbMed.name.toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").replace(/\s+/g, "");
+          const dbBase = (dbMed.description || "").toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").replace(/\s+/g, "");
           return dbBase.includes(search) || search.includes(dbBase);
         });
       };
@@ -270,14 +271,14 @@
       // From parser
       for (const parsedMed of parsed.medicines) {
         const dbMatch = findDBMatch(parsedMed.name);
-        const price = dbMatch ? (dbMatch.sellingPrice || dbMatch.price || 0) : 0;
-        const name = dbMatch?.name || parsedMed.name;
+        const price = dbMatch ? (dbMatch.newMrp || dbMatch.price || 0) : 0;
+        const name = dbMatch?.description || parsedMed.name;
         addedNames.add(name.toLowerCase());
         matchedMeds.push({
           medicineId: dbMatch?._id || null,
           name,
           category: dbMatch?.category || "Tablet",
-          unit: dbMatch?.unit || "Tablet",
+          unit: dbMatch?.pack || "Tablet",
           dosage: parsedMed.dosage,
           freq: parsedMed.freq,
           freqLabel: parsedMed.freqLabel,
@@ -285,26 +286,26 @@
           qty: parsedMed.qty,
           price,
           subtotal: parsedMed.qty * price,
-          stock: dbMatch?.stock || 0,
-          inStock: (dbMatch?.stock || 0) >= parsedMed.qty,
+          stock: dbMatch?.qty || 0,
+          inStock: (dbMatch?.qty || 0) >= parsedMed.qty,
         });
       }
 
       // Fallback: text match against DB
       if (matchedMeds.length === 0 && text) {
         for (const med of dbMedicines) {
-          const baseName = med.name.toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").trim();
-          if (baseName.length >= 4 && text.includes(baseName) && !addedNames.has(med.name.toLowerCase())) {
+          const baseName = (med.description || "").toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").trim();
+          if (baseName.length >= 4 && text.includes(baseName) && !addedNames.has((med.description || "").toLowerCase())) {
             const freq = { m: 1, a: 0, n: 1 };
             const duration = 5;
             const daily = 2;
             const qty = daily * duration;
-            const price = med.sellingPrice || med.price || 0;
-            addedNames.add(med.name.toLowerCase());
+            const price = med.newMrp || med.price || 0;
+            addedNames.add((med.description || "").toLowerCase());
             matchedMeds.push({
-              medicineId: med._id, name: med.name, category: med.category, unit: med.unit,
+              medicineId: med._id, name: med.description, category: med.category, unit: med.pack,
               dosage: "", freq, freqLabel: "1-0-1", duration, qty, price, subtotal: qty * price,
-              stock: med.stock || 0, inStock: (med.stock || 0) >= qty,
+              stock: med.qty || 0, inStock: (med.qty || 0) >= qty,
             });
           }
         }
@@ -364,7 +365,7 @@ exports.extractMedicines = async (req, res) => {
       console.log(`   Sample medicines: ${dbMedicines.slice(0, 10).map(m => m.name).join(", ")}${dbMedicines.length > 10 ? "..." : ""}`);
     }
 
-    // ── Helper: Match medicine names to DB (using description field) ──
+    // ── Helper: Match medicine names to DB (using description field ONLY) ──
     const findDBMatch = (medName) => {
       const search = medName.toLowerCase().replace(/\s+/g, "");
       if (search.length < 3) {
@@ -373,35 +374,39 @@ exports.extractMedicines = async (req, res) => {
       }
 
       const matches = dbMedicines.filter((dbMed) => {
-        const dbDesc = (dbMed.description || dbMed.name || "").toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").replace(/\s+/g, "");
+        // Use ONLY description field (no name field exists in schema)
+        const description = dbMed.description || "";
+        const dbDesc = description.toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").replace(/\s+/g, "");
         const isMatch = dbDesc.includes(search) || search.includes(dbDesc);
         if (isMatch) {
-          console.log(`✅ Matched: "${medName}" → "${dbMed.description || dbMed.name}" (search="${search}", dbDesc="${dbDesc}")`);
+          console.log(`✅ Matched: "${medName}" → "${description}"`);
         }
         return isMatch;
       });
 
       if (matches.length === 0) {
         console.log(`❌ No match for: "${medName}" (search="${search}")`);
-        // Log top 5 database medicines for comparison
-        console.log(`   Available medicines (first 5): ${dbMedicines.slice(0, 5).map(m => m.description || m.name).join(", ")}`);
+        // Log first 5 medicines for debugging
+        console.log(`   Sample DB medicines: ${dbMedicines.slice(0, 5).map(m => m.description).join(", ")}`);
       }
 
       return matches[0] || null;
     };
 
-    // ── Helper: Build matched medicine object (using new schema) ──
+    // ── Helper: Build matched medicine object ──
     const buildMedicineObj = (name, dbMatch, freq, duration) => {
       const daily = freq.m + freq.a + freq.n;
       const qty = daily * duration;
-      const price = dbMatch ? (dbMatch.newMrp || dbMatch.sellingPrice || dbMatch.price || 0) : 0;
-      const stock = dbMatch?.qty ?? dbMatch?.stock ?? 0;
+      // Use newMrp from schema (price virtual also works)
+      const price = dbMatch ? (dbMatch.newMrp || dbMatch.price || 0) : 0;
+      // Schema uses 'qty' field for stock quantity
+      const stock = dbMatch?.qty ?? 0;
       return {
         medicineId: dbMatch?._id || null,
-        name: dbMatch?.description || dbMatch?.name || name,
-        description: dbMatch?.description || dbMatch?.name || name,
+        name: dbMatch?.description || name,
+        description: dbMatch?.description || name,
         mfr: dbMatch?.mfr || "",
-        pack: dbMatch?.pack || dbMatch?.unit || "",
+        pack: dbMatch?.pack || "",
         batchNo: dbMatch?.batchNo || "",
         hsnCode: dbMatch?.hsnCode || "",
         gstPercent: dbMatch?.gstPercent || 5,
@@ -503,11 +508,11 @@ exports.extractMedicines = async (req, res) => {
       // Fallback: scan full text for more medicines
       if (matchedMeds.length === 0 && text) {
         for (const med of dbMedicines) {
-          const baseName = (med.description || med.name || "").toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").trim();
-          const medDescKey = (med.description || med.name || "").toLowerCase();
+          const baseName = (med.description || "").toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").trim();
+          const medDescKey = (med.description || "").toLowerCase();
           if (baseName.length >= 4 && text.includes(baseName) && !addedNames.has(medDescKey)) {
             addedNames.add(medDescKey);
-            matchedMeds.push(buildMedicineObj(med.description || med.name, med, { m: 1, a: 0, n: 1 }, 5));
+            matchedMeds.push(buildMedicineObj(med.description, med, { m: 1, a: 0, n: 1 }, 5));
           }
         }
       }
@@ -552,11 +557,11 @@ exports.extractMedicines = async (req, res) => {
       // Fallback: scan full text
       if (matchedMeds.length === 0 && text) {
         for (const med of dbMedicines) {
-          const baseName = (med.description || med.name || "").toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").trim();
-          const medDescKey = (med.description || med.name || "").toLowerCase();
+          const baseName = (med.description || "").toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").trim();
+          const medDescKey = (med.description || "").toLowerCase();
           if (baseName.length >= 4 && text.includes(baseName) && !addedNames.has(medDescKey)) {
             addedNames.add(medDescKey);
-            matchedMeds.push(buildMedicineObj(med.description || med.name, med, { m: 1, a: 0, n: 1 }, 5));
+            matchedMeds.push(buildMedicineObj(med.description, med, { m: 1, a: 0, n: 1 }, 5));
           }
         }
       }
