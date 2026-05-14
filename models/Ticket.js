@@ -47,7 +47,7 @@ const ticketSchema = new mongoose.Schema({
 
   category: {
     type: String,
-    enum: ["Order Issue", "Payment Issue", "Delivery Issue", "Medicine Query", "Account Issue", "General"],
+    enum: ["General", "Order Issue", "Payment Issue", "Delivery Issue", "Medicine Issue", "Account Issue"],
     default: "General",
   },
 

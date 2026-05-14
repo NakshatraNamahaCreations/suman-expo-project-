@@ -10,6 +10,24 @@ function paginate(query) {
   return { page, limit, skip, all };
 }
 
+/* ── Priority mapping based on category ───────────────────────── */
+function getPriorityByCategory(category) {
+  // Medium priority categories
+  const mediumCategories = ["General", "Order Issue", "Payment Issue"];
+
+  // High priority categories
+  const highCategories = ["Delivery Issue", "Medicine Issue", "Account Issue"];
+
+  if (mediumCategories.includes(category)) {
+    return "Medium";
+  } else if (highCategories.includes(category)) {
+    return "High";
+  }
+
+  // Default to Medium if category doesn't match
+  return "Medium";
+}
+
 
 // ============================
 // GET ALL TICKETS (server-side paginated)
@@ -91,14 +109,32 @@ exports.createTicket = async (req, res) => {
       return res.status(400).json({ success: false, message: "Missing required fields" });
     }
 
+    // Automatically assign priority based on category
+    // If priority is explicitly provided, use it; otherwise auto-assign based on category
+    let assignedPriority = priority;
+
+    if (!priority || !["Low", "Medium", "High", "Urgent"].includes(priority)) {
+      assignedPriority = getPriorityByCategory(category || "General");
+    }
+
+    console.log(`📋 Ticket created: category="${category}" → priority="${assignedPriority}"`);
+
     const ticket = await Ticket.create({
       ticketId: "TKT-" + Date.now(),
       userId, customerName, customerPhone, customerEmail,
-      subject, category, priority, description, orderId,
+      subject, category, priority: assignedPriority, description, orderId,
       ...(orderDetails && { orderDetails }),
     });
 
-    res.status(201).json({ success: true, message: "Ticket created successfully", data: ticket });
+    res.status(201).json({
+      success: true,
+      message: "Ticket created successfully",
+      data: ticket,
+      priorityAssignment: {
+        category: ticket.category,
+        assignedPriority: ticket.priority,
+      }
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: "Ticket creation failed", error: err.message });
   }
