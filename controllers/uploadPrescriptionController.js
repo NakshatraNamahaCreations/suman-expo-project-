@@ -569,17 +569,18 @@ exports.extractMedicines = async (req, res) => {
     const validMeds = matchedMeds.filter(m => m.medicineId);
     console.log(`✅ Found ${validMeds.length} matched medicines from ${matchedMeds.length} total medicines`);
 
-    // Clean up uploaded file
-    try {
-      fs.unlinkSync(filePath);
-      console.log("🗑️  File cleaned up successfully");
-    } catch (err) {
-      console.error("Error deleting file:", err.message);
-    }
-
     const subtotal = validMeds.reduce((sum, m) => sum + m.subtotal, 0);
     const gst = Math.round(subtotal * 0.05 * 100) / 100;
     const total = subtotal + gst;
+
+    // Store file information for prescription
+    const fileInfo = {
+      filePath: req.file.path,
+      originalName: req.file.originalname,
+      mimetype: req.file.mimetype,
+      size: req.file.size,
+      uploadedAt: new Date()
+    };
 
     res.json({
       success: true,
@@ -596,6 +597,7 @@ exports.extractMedicines = async (req, res) => {
         subtotal,
         gst,
         total,
+        fileInfo, // Include file info for storage
       },
     });
   } catch (error) {

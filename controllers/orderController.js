@@ -150,7 +150,7 @@ function paginate(query) {
 
 exports.createOrder = async (req, res) => {
   try {
-    const { patientId, addressId, prescriptionId, items, pharmacistReview, unmatchedMedicines, totalAmount, deliveryFee, gst, cgst, sgst, itemTotal, userId: requestUserId } = req.body;
+    const { patientId, addressId, prescriptionId, items, pharmacistReview, unmatchedMedicines, totalAmount, deliveryFee, gst, cgst, sgst, itemTotal, userId: requestUserId, prescriptionFile } = req.body;
 
     // ✅ VALIDATE PATIENT ID
     if (!patientId) {
@@ -257,6 +257,7 @@ exports.createOrder = async (req, res) => {
     const orderData = {
       userId,
       prescription: prescriptionId,
+      prescriptionFile: prescriptionFile || null,
       patient: patient._id,
       orderSource: "mobile",
       subtotal: serverSubtotal,

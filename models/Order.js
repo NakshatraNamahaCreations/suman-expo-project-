@@ -31,6 +31,13 @@ const orderSchema = new mongoose.Schema(
       ref: "Prescription",
     },
 
+    // Direct prescription file reference for quick access
+    prescriptionFile: {
+      filePath: String,
+      fileName: String,
+      uploadedAt: Date,
+    },
+
     patient: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "PatientDetails",

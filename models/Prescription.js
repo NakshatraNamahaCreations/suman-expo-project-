@@ -41,6 +41,28 @@ const prescriptionSchema = new mongoose.Schema(
       default: "Pending",
     },
     meds: [medSchema],
+
+    // Prescription file storage
+    filePath: {
+      type: String,
+      description: "Path to the uploaded prescription file (PDF/Image)"
+    },
+    fileOriginalName: {
+      type: String,
+      description: "Original file name as uploaded by user"
+    },
+    fileMimetype: {
+      type: String,
+      description: "MIME type of the uploaded file"
+    },
+    fileSize: {
+      type: Number,
+      description: "File size in bytes"
+    },
+    uploadedAt: {
+      type: Date,
+      description: "When the prescription file was uploaded"
+    }
   },
   { timestamps: true }
 );
