@@ -7,6 +7,40 @@
   const generateStyledPDF = require("../utils/generateStyledPDF");
   const { extractTextFromImage, parsePrescriptionText } = require("../utils/imageOCR");
 
+  // Smart medicine matcher factory — multi-strategy approach
+  function buildMatcher(dbMedicines) {
+    return function findDBMatch(medName) {
+      if (!medName || medName.trim().length < 3) return null;
+
+      const searchLower = medName.toLowerCase().trim();
+      const searchTokens = searchLower.split(/\s+/).filter(t => t.length >= 3);
+
+      // Strategy 1: exact case-insensitive match
+      const exact = dbMedicines.find(d => (d.description || "").toLowerCase() === searchLower);
+      if (exact) return exact;
+
+      // Strategy 2: token overlap scoring
+      if (searchTokens.length >= 2) {
+        let bestMatch = null;
+        let bestScore = 0;
+        for (const dbMed of dbMedicines) {
+          const desc = (dbMed.description || "").toLowerCase();
+          const hits = searchTokens.filter(t => desc.includes(t)).length;
+          const score = hits / searchTokens.length;
+          if (score > bestScore) { bestScore = score; bestMatch = dbMed; }
+        }
+        if (bestScore >= 0.6 && bestMatch) return bestMatch;
+      }
+
+      // Strategy 3: stripped substring fallback
+      const stripped = searchLower.replace(/\s+/g, "");
+      return dbMedicines.find(dbMed => {
+        const dbDesc = (dbMed.description || "").toLowerCase()
+          .replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").replace(/\s+/g, "");
+        return dbDesc.includes(stripped) || stripped.includes(dbDesc);
+      }) || null;
+    };
+  }
 
 
   exports.savePrescription = async (req, res) => {
@@ -75,15 +109,7 @@
       const matchedMeds = [];
 
       // Helper: match parsed medicine name to DB for pricing
-      const findDBMatch = (medName) => {
-        const search = medName.toLowerCase().replace(/\s+/g, "");
-        if (search.length < 3) return null;
-        return dbMedicines.find((dbMed) => {
-          // Use description field (schema doesn't have name field)
-          const dbBase = (dbMed.description || "").toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").replace(/\s+/g, "");
-          return dbBase.includes(search) || search.includes(dbBase);
-        });
-      };
+      const findDBMatch = buildMatcher(dbMedicines);
 
       // ── STEP 1: OCR (OCR.space API → Tesseract fallback) ──
       let extractedText = "";
@@ -259,14 +285,7 @@
       const matchedMeds = [];
       const addedNames = new Set();
 
-      const findDBMatch = (medName) => {
-        const search = medName.toLowerCase().replace(/\s+/g, "");
-        if (search.length < 3) return null;
-        return dbMedicines.find((dbMed) => {
-          const dbBase = (dbMed.description || "").toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").replace(/\s+/g, "");
-          return dbBase.includes(search) || search.includes(dbBase);
-        });
-      };
+      const findDBMatch = buildMatcher(dbMedicines);
 
       // From parser
       for (const parsedMed of parsed.medicines) {
@@ -366,31 +385,16 @@ exports.extractMedicines = async (req, res) => {
     }
 
     // ── Helper: Match medicine names to DB (using description field ONLY) ──
+    const baseFindDBMatch = buildMatcher(dbMedicines);
     const findDBMatch = (medName) => {
-      const search = medName.toLowerCase().replace(/\s+/g, "");
-      if (search.length < 3) {
-        console.log(`⚠️  Med name too short: "${medName}" (${search.length} chars)`);
-        return null;
-      }
-
-      const matches = dbMedicines.filter((dbMed) => {
-        // Use ONLY description field (no name field exists in schema)
-        const description = dbMed.description || "";
-        const dbDesc = description.toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").replace(/\s+/g, "");
-        const isMatch = dbDesc.includes(search) || search.includes(dbDesc);
-        if (isMatch) {
-          console.log(`✅ Matched: "${medName}" → "${description}"`);
-        }
-        return isMatch;
-      });
-
-      if (matches.length === 0) {
-        console.log(`❌ No match for: "${medName}" (search="${search}")`);
-        // Log first 5 medicines for debugging
+      const match = baseFindDBMatch(medName);
+      if (match) {
+        console.log(`✅ Matched: "${medName}" → "${match.description}"`);
+      } else if (medName && medName.trim().length >= 3) {
+        console.log(`❌ No match for: "${medName}"`);
         console.log(`   Sample DB medicines: ${dbMedicines.slice(0, 5).map(m => m.description).join(", ")}`);
       }
-
-      return matches[0] || null;
+      return match;
     };
 
     // ── Helper: Build matched medicine object ──

@@ -219,7 +219,7 @@ function parsePrescriptionText(text) {
 
     for (const row of rows) {
       const hasFreqPattern = row.some((c) => /\d\s*[-–—.,]\s*\d\s*[-–—.,]\s*\d/.test(c));
-      const hasDuration = row.some((c) => /\d+\s*days?/i.test(c));
+      const hasDuration = row.some((c) => /\d+\s*(?:days?|\bd\b)/i.test(c));
       const hasMedName = row.some((c) => /^[a-zA-Z\s]{3,}/.test(c) && !/days?/i.test(c) && !/\d\s*[-–]\s*\d/.test(c));
 
       if (hasMedName && !nameRow) nameRow = row;
@@ -251,7 +251,7 @@ function parsePrescriptionText(text) {
         // Get corresponding duration
         let duration = 5;
         if (durRow && durRow[i]) {
-          const dm = durRow[i].match(/(\d+)\s*days?/i);
+          const dm = durRow[i].match(/(\d+)\s*(?:days?|\bd\b)/i);
           if (dm) duration = parseInt(dm[1], 10);
         }
 
@@ -261,7 +261,7 @@ function parsePrescriptionText(text) {
 
         // Clean name
         name = name.replace(/(\d+\.?\d*\s*(?:mg|ml|mcg|gm?|iu))/gi, "").trim();
-        name = name.replace(/^(tab|cap|syp|syr|inj)\.?\s*/i, "").trim();
+        name = name.replace(/^(tablet|capsule|syrup|injection|tab|cap|syp|syr|inj)\b\.?\s*/i, "").trim();
         name = name.replace(/[^a-zA-Z0-9\s\-]/g, " ").replace(/\s+/g, " ").trim();
 
         if (!name || name.length < 3) continue;
@@ -342,14 +342,14 @@ function parsePrescriptionText(text) {
 
   // ── Duration patterns ──
   const durationPatterns = [
-    { regex: /(\d+)\s*(?:days?|d\b)/i, multiplier: 1 },
+    { regex: /(\d+)\s*(?:days?|\bd\b)/i, multiplier: 1 },
     { regex: /(?:for|x|×|into)\s*(\d+)\s*(?:days?|d\b)?/i, multiplier: 1 },
     { regex: /(\d+)\s*(?:weeks?|wks?)/i, multiplier: 7 },
     { regex: /(\d+)\s*(?:months?|mon)/i, multiplier: 30 },
   ];
 
   // ── Medicine detection patterns ──
-  const medPrefixRegex = /\b(tab|cap|syp|syr|inj|oint|cream|drops?|susp|gel|sr|xr|forte|plus)\b\.?\s*/gi;
+  const medPrefixRegex = /\b(tablet|capsule|syrup|injection|tab|cap|syp|syr|inj|oint|cream|drops?|susp|gel|sr|xr|forte|plus)\b\.?\s*/gi;
   const dosageRegex = /(\d+\.?\d*\s*(?:mg|ml|mcg|gm?|iu|%|units?))/i;
   const lineNumRegex = /^\s*(?:\d+[.):\-]\s*|[-•*]\s*|[ivx]+[.)]\s*|rx?\s*\d*[:.)\s]*)/i;
 
@@ -502,7 +502,7 @@ function parsePrescriptionText(text) {
       const dosage = dosageMatch ? dosageMatch[1].trim() : "";
       name = name.replace(dosageRegex, "").trim();
       // Remove prefix
-      name = name.replace(/^(tab|cap|syp|syr|inj|oint|cream|drops?|susp|gel)\.?\s*/i, "").trim();
+      name = name.replace(/^(tablet|capsule|syrup|injection|tab|cap|syp|syr|inj|oint|cream|drops?|susp|gel)\b\.?\s*/i, "").trim();
       // Remove noise
       name = name.replace(/\b(after|before|with|empty\s*stomach)\s*(food|meals?|breakfast|lunch|dinner)?\b/gi, "").trim();
       name = name.replace(/\b(sos|prn|stat|od|bd|tds|tid|qid|hs|ac|pc|po)\b/gi, "").trim();
