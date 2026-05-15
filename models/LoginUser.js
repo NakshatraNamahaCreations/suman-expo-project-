@@ -39,6 +39,8 @@ const loginUserSchema = new mongoose.Schema(
       enum: ["active", "inactive", "blocked"],
       default: "active",
     },
+    statusRemark: String,
+    statusChangedAt: Date,
     lastLogin: Date,
     lastOtpRequestAt: Date,
     createdAt: {

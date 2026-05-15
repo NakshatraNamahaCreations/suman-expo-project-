@@ -8,6 +8,7 @@ const {
   logout,
   getAllLoginUsers,
   adminCreateUser,
+  updateUserStatus,
 } = require("../controllers/authLoginController");
 const { authMiddleware } = require("../middleware/auth");
 
@@ -87,5 +88,14 @@ router.get("/all-users", getAllLoginUsers);
  * Response: { success: true, message: "...", data: { _id, phone, name, ... } }
  */
 router.post("/admin-create", adminCreateUser);
+
+/**
+ * PATCH /api/auth-login/update-status/:userId
+ * Update user status (Active, Inactive, Blocked) with remark
+ *
+ * Request: { status: "inactive" | "active" | "blocked", remark: "reason..." }
+ * Response: { success: true, message: "...", data: { updated user } }
+ */
+router.patch("/update-status/:userId", updateUserStatus);
 
 module.exports = router;

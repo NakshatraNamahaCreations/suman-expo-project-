@@ -289,6 +289,8 @@ exports.getAllLoginUsers = async (req, res) => {
       phone: user.phone,
       name: user.name,
       isPhoneVerified: user.isPhoneVerified,
+      status: user.status,
+      statusRemark: user.statusRemark,
       lastLogin: user.lastLogin,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
@@ -360,6 +362,63 @@ exports.adminCreateUser = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to create user",
+      error: err.message,
+    });
+  }
+};
+
+/* ════════════════════════════════════════════════════
+   ADMIN: UPDATE USER STATUS
+════════════════════════════════════════════════════ */
+exports.updateUserStatus = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { status, remark } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID is required",
+      });
+    }
+
+    const validStatuses = ["active", "inactive", "blocked"];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid status. Must be: active, inactive, or blocked",
+      });
+    }
+
+    const user = await LoginUser.findByIdAndUpdate(
+      userId,
+      {
+        status,
+        statusRemark: remark || "",
+        statusChangedAt: new Date(),
+      },
+      { new: true }
+    ).select("-otp");
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    console.log(`[STATUS] User ${user.phone} status changed to ${status}`);
+
+    res.json({
+      success: true,
+      message: `User status updated to ${status}`,
+      data: user,
+    });
+  } catch (err) {
+    console.error("Update user status error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update user status",
       error: err.message,
     });
   }
