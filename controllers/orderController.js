@@ -748,7 +748,41 @@ exports.createAdminOrder = async (req, res) => {
       prescription: prescription._id,
       patient: patient._id,
       orderSource: "admin",
+      subtotal: subtotal,
+      deliveryFee: 0,
+      gst: gst,
       totalAmount: total,
+      // ✅ Populate items array (same structure as mobile app)
+      items: items.map((item) => {
+        const med = medMap[item.medicineId.toString()];
+        const freq = item.freq || { m: 1, a: 0, n: 1 };
+        const qty = item.qty ?? (freq.m + freq.a + freq.n) * (item.duration || 5);
+        const price = Number(med.newMrp || 0);
+        const itemSubtotal = qty * price;
+        const itemGst = (itemSubtotal * (med.gstPercent || 5)) / 100;
+
+        return {
+          medicineId: item.medicineId,
+          name: item.name || med.description || "",
+          description: med.description || "",
+          mfr: med.mfr || "",
+          pack: med.pack || "",
+          batchNo: med.batchNo || "",
+          hsnCode: med.hsnCode || "",
+          gstPercent: med.gstPercent || 5,
+          netValue: price,
+          qty: qty,
+          duration: item.duration || 5,
+          frequency: `${freq.m}-${freq.a}-${freq.n}`,
+          freq: freq,
+          price: price,
+          basePrice: price,
+          gstAmount: itemGst,
+          cgst: itemGst / 2,
+          sgst: itemGst / 2,
+          subtotal: itemSubtotal,
+        };
+      }),
       patientDetails: {
         name: patient.name,
         patientId: patient.patientId,
