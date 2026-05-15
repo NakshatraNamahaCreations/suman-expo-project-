@@ -430,7 +430,6 @@ exports.updateUserStatus = async (req, res) => {
 exports.deleteUser = async (req, res) => {
   try {
     const { userId } = req.params;
-    const { reason } = req.body;
 
     if (!userId) {
       return res.status(400).json({
@@ -448,7 +447,7 @@ exports.deleteUser = async (req, res) => {
       });
     }
 
-    console.log(`[DELETE] User ${user.phone} deleted. Reason: ${reason || "No reason provided"}`);
+    console.log(`[DELETE] User ${user.phone} deleted by admin`);
 
     res.json({
       success: true,
@@ -457,7 +456,6 @@ exports.deleteUser = async (req, res) => {
         phone: user.phone,
         name: user.name,
         deletedAt: new Date(),
-        reason: reason || "",
       },
     });
   } catch (err) {
