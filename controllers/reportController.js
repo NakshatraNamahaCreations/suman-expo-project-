@@ -1,5 +1,7 @@
 const Order = require("../models/Order");
 const Medicine = require("../models/Medicine");
+const Patient = require("../models/Patient");
+const LoginUser = require("../models/LoginUser");
 
 /* =========================
    SALES REPORT
@@ -191,5 +193,52 @@ exports.getInventoryReport = async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Inventory report error" });
+  }
+};
+
+/* =========================
+   CA REPORT (Payment/Transaction Details)
+========================= */
+exports.getCAReport = async (req, res) => {
+  try {
+    const orders = await Order.find()
+      .populate("patient", "name phone")
+      .sort({ createdAt: -1 })
+      .select("orderId totalAmount paymentStatus paymentDate orderStatus patient createdAt")
+      .lean();
+
+    const caData = orders.map((order, index) => ({
+      transactionId: `TXN-${order._id.toString().slice(-10).toUpperCase()}`,
+      orderId: order.orderId || "N/A",
+      amount: order.totalAmount || 0,
+      paymentStatus: order.paymentStatus || "Pending",
+      paymentDate: order.paymentDate ? new Date(order.paymentDate).toISOString().split("T")[0] : order.createdAt ? new Date(order.createdAt).toISOString().split("T")[0] : "N/A",
+      patientName: order.patient?.name || "Unknown",
+      mobileNumber: order.patient?.phone || "N/A",
+      orderStatus: order.orderStatus || "Created",
+    }));
+
+    // Summary statistics
+    const summary = {
+      totalTransactions: caData.length,
+      totalAmount: caData.reduce((sum, t) => sum + (t.amount || 0), 0),
+      paidAmount: caData
+        .filter((t) => t.paymentStatus === "Paid")
+        .reduce((sum, t) => sum + (t.amount || 0), 0),
+      pendingAmount: caData
+        .filter((t) => t.paymentStatus === "Pending")
+        .reduce((sum, t) => sum + (t.amount || 0), 0),
+      paidCount: caData.filter((t) => t.paymentStatus === "Paid").length,
+      pendingCount: caData.filter((t) => t.paymentStatus === "Pending").length,
+    };
+
+    res.json({
+      success: true,
+      data: caData,
+      summary,
+    });
+  } catch (err) {
+    console.error("CA Report error:", err);
+    res.status(500).json({ success: false, message: "CA report error", error: err.message });
   }
 };
