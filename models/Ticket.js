@@ -88,6 +88,12 @@ const ticketSchema = new mongoose.Schema({
 
   resolvedAt: Date,
 
+  statusHistory: [{
+    status: String,
+    description: String,
+    changedAt: { type: Date, default: Date.now },
+  }],
+
 }, { timestamps: true });
 
 

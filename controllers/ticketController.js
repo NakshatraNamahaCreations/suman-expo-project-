@@ -146,7 +146,7 @@ exports.createTicket = async (req, res) => {
 // ============================
 exports.updateTicketStatus = async (req, res) => {
   try {
-    const { status } = req.body;
+    const { status, description } = req.body;
     const validStatuses = ["Open", "In Progress", "Resolved", "Closed"];
 
     if (!validStatuses.includes(status)) {
@@ -156,7 +156,21 @@ exports.updateTicketStatus = async (req, res) => {
     const updateData = { status };
     if (status === "Resolved") updateData.resolvedAt = new Date();
 
-    const ticket = await Ticket.findByIdAndUpdate(req.params.id, updateData, { new: true });
+    // Add to status history
+    const historyEntry = {
+      status,
+      description: description || "",
+      changedAt: new Date(),
+    };
+
+    const ticket = await Ticket.findByIdAndUpdate(
+      req.params.id,
+      {
+        ...updateData,
+        $push: { statusHistory: historyEntry },
+      },
+      { new: true }
+    );
     if (!ticket) return res.status(404).json({ success: false, message: "Ticket not found" });
 
     res.json({ success: true, message: "Ticket status updated", data: ticket });
