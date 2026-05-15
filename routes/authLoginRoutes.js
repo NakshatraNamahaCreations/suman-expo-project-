@@ -9,6 +9,7 @@ const {
   getAllLoginUsers,
   adminCreateUser,
   updateUserStatus,
+  deleteUser,
 } = require("../controllers/authLoginController");
 const { authMiddleware } = require("../middleware/auth");
 
@@ -91,11 +92,20 @@ router.post("/admin-create", adminCreateUser);
 
 /**
  * PATCH /api/auth-login/update-status/:userId
- * Update user status (Active, Inactive, Blocked) with remark
+ * Update user status (Active, Inactive) with remark
  *
- * Request: { status: "inactive" | "active" | "blocked", remark: "reason..." }
+ * Request: { status: "inactive" | "active", remark: "reason..." }
  * Response: { success: true, message: "...", data: { updated user } }
  */
 router.patch("/update-status/:userId", updateUserStatus);
+
+/**
+ * DELETE /api/auth-login/delete-user/:userId
+ * Delete a user account (permanent deletion)
+ *
+ * Request: { reason: "reason for deletion" }
+ * Response: { success: true, message: "...", data: { phone, name, deletedAt } }
+ */
+router.delete("/delete-user/:userId", deleteUser);
 
 module.exports = router;

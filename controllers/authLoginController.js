@@ -423,3 +423,49 @@ exports.updateUserStatus = async (req, res) => {
     });
   }
 };
+
+/* ════════════════════════════════════════════════════
+   ADMIN: DELETE USER
+════════════════════════════════════════════════════ */
+exports.deleteUser = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { reason } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID is required",
+      });
+    }
+
+    const user = await LoginUser.findByIdAndDelete(userId);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    console.log(`[DELETE] User ${user.phone} deleted. Reason: ${reason || "No reason provided"}`);
+
+    res.json({
+      success: true,
+      message: "User deleted successfully",
+      data: {
+        phone: user.phone,
+        name: user.name,
+        deletedAt: new Date(),
+        reason: reason || "",
+      },
+    });
+  } catch (err) {
+    console.error("Delete user error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete user",
+      error: err.message,
+    });
+  }
+};
