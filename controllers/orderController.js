@@ -632,10 +632,9 @@ exports.markPaymentPaid = async (req, res) => {
 // ============================
 exports.createAdminOrder = async (req, res) => {
   try {
-    const { patientId, doctor, items, address, discount = 0, notes } = req.body;
+    const { patientId, addressId, items, totalAmount, deliveryFee = 0, gst = 0, cgst = 0, sgst = 0, itemTotal = 0, pharmacistReview = "" } = req.body;
 
-
-
+    // Minimal validation only
     if (!patientId) {
       return res.status(400).json({
         success: false,
@@ -643,146 +642,52 @@ exports.createAdminOrder = async (req, res) => {
       });
     }
 
-    const patient = await PatientDetails.findById(patientId);
+    if (!addressId) {
+      return res.status(400).json({
+        success: false,
+        message: "addressId is required",
+      });
+    }
 
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "items array is required",
+      });
+    }
+
+    const patient = await PatientDetails.findById(patientId);
     if (!patient) {
       return res.status(404).json({
         success: false,
         message: "Patient not found",
       });
     }
-    if (!items || !Array.isArray(items) || items.length === 0)
-      return res.status(400).json({ success: false, message: "items array is required" });
-    if (!address || !address.fullAddress)
-      return res.status(400).json({ success: false, message: "address.fullAddress is required" });
-    if (!patient) return res.status(404).json({ success: false, message: "Patient not found" });
 
-    // ── Fetch ALL medicines in one query (not N+1) ──
-    const medicineIds = items.map((i) => i.medicineId);
-    const medicines = await Medicine.find({ _id: { $in: medicineIds } }).lean();
-
-    if (medicines.length !== items.length) {
-      return res.status(400).json({ success: false, message: "One or more medicines not found" });
+    const address = await Address.findById(addressId);
+    if (!address) {
+      return res.status(404).json({
+        success: false,
+        message: "Address not found",
+      });
     }
 
-    const medMap = {};
-    medicines.forEach((m) => { medMap[m._id.toString()] = m; });
-
-
-    // 🔥 ADD THIS HERE 👇 (REPLACE OLD LOOP)
-
-    // Merge quantities of same medicine
-    const mergedItems = {};
-
-    items.forEach(item => {
-      const id = item.medicineId.toString();
-      if (!mergedItems[id]) mergedItems[id] = 0;
-      mergedItems[id] += item.qty;
-    });
-
-    // Validate stock
-    for (const id in mergedItems) {
-      const med = medMap[id];
-
-      if (!med) {
-        return res.status(404).json({
-          success: false,
-          message: "Medicine not found",
-        });
-      }
-
-      if (med.qty < mergedItems[id]) {
-        return res.status(400).json({
-          success: false,
-          message: `${med.description || med.name} only has ${med.qty} in stock`,
-        });
-      }
-    }
-
-
-    // Build prescription meds & totals
-    let subtotal = 0;
-    const pressMeds = items.map((item) => {
-      const med = medMap[item.medicineId.toString()];
-      const freq = item.freq || { m: 1, a: 0, n: 1 };
-      const duration = item.duration || 5;
-      const qty = item.qty ?? (freq.m + freq.a + freq.n) * duration;
-      const price = Number(med.newMrp || 0);
-      const itemSub = qty * price;
-      subtotal += itemSub;
-      return { medicine: med._id, duration, freq, qty, price, subtotal: itemSub };
-    });
-
-    // Calculate per-medicine GST sum instead of average
-    const gst = Math.round(pressMeds.reduce((sum, pm) => {
-      const med = medMap[pm.medicine.toString()];
-      return sum + (pm.qty * pm.price * (med.gstPercent || 5)) / 100;
-    }, 0) * 100) / 100;
-    const total = Math.round((subtotal + gst - discount) * 100) / 100;
-
-    const start = new Date();
-    const maxDur = Math.max(...items.map((i) => i.duration || 5));
-    const expiry = new Date(start);
-    expiry.setDate(expiry.getDate() + maxDur);
-
-    const prescription = await Prescription.create({
-      rxId: "RX-ADM-" + Date.now(),
-      patient: patient._id,
-      doctor: doctor || "Admin Order",
-      start,
-      expiry,
-      meds: pressMeds,
-      subtotal,
-      gst,
-      discount,
-      total,
-      payStatus: "Paid",
-      orderStatus: "Processing",
-      ...(notes ? { notes } : {}),
-    });
-
-
-
+    // Store order exactly as frontend sends it - NO RECALCULATION
     const order = await Order.create({
       userId: patient.userId,
-      prescription: prescription._id,
-      patient: patient._id,
+      patientId: patient._id,
+      addressId: address._id,
       orderSource: "admin",
-      subtotal: subtotal,
-      deliveryFee: 0,
+      items: items,
+      subtotal: itemTotal,
+      deliveryFee: deliveryFee,
       gst: gst,
-      totalAmount: total,
-      // ✅ Populate items array (same structure as mobile app)
-      items: items.map((item) => {
-        const med = medMap[item.medicineId.toString()];
-        const freq = item.freq || { m: 1, a: 0, n: 1 };
-        const qty = item.qty ?? (freq.m + freq.a + freq.n) * (item.duration || 5);
-        const price = Number(med.newMrp || 0);
-        const itemSubtotal = qty * price;
-        const itemGst = (itemSubtotal * (med.gstPercent || 5)) / 100;
-
-        return {
-          medicineId: item.medicineId,
-          name: item.name || med.description || "",
-          description: med.description || "",
-          mfr: med.mfr || "",
-          pack: med.pack || "",
-          batchNo: med.batchNo || "",
-          hsnCode: med.hsnCode || "",
-          gstPercent: med.gstPercent || 5,
-          netValue: price,
-          qty: qty,
-          duration: item.duration || 5,
-          frequency: `${freq.m}-${freq.a}-${freq.n}`,
-          freq: freq,
-          price: price,
-          basePrice: price,
-          gstAmount: itemGst,
-          cgst: itemGst / 2,
-          sgst: itemGst / 2,
-          subtotal: itemSubtotal,
-        };
-      }),
+      cgst: cgst,
+      sgst: sgst,
+      totalAmount: totalAmount,
+      pharmacistReview: pharmacistReview,
+      orderStatus: "Processing",
+      paymentStatus: "Paid",
       patientDetails: {
         name: patient.name,
         patientId: patient.patientId,
@@ -800,32 +705,21 @@ exports.createAdminOrder = async (req, res) => {
         pincode: address.pincode || "",
       },
       deliveryAddress: address.fullAddress,
-      paymentStatus: "Paid",
-      orderStatus: "Processing",
+      createdAt: new Date(),
     });
 
-    // 🔥 DEDUCT STOCK (ADD THIS)
-    await Medicine.bulkWrite(
-      Object.entries(mergedItems).map(([id, qty]) => ({
-        updateOne: {
-          filter: { _id: id },
-          update: {
-            $inc: {
-              qty: -qty,
-            },
-          },
-        },
-      }))
-    );
-
-    const populated = await Order.findById(order._id).populate({
-      path: "prescription",
-      populate: { path: "meds.medicine", select: "name unit price" },
+    res.status(201).json({
+      success: true,
+      message: "Order created successfully",
+      data: order,
     });
 
-    res.status(201).json({ success: true, message: "Order created successfully", data: populated });
-  } catch (err) {
-    res.status(500).json({ success: false, message: "Order creation failed", error: err.message });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to create order",
+      error: error.message,
+    });
   }
 };
 
