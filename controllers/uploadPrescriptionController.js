@@ -2,16 +2,127 @@ const fs = require("fs");
 const Medicine = require("../models/Medicine");
 const extractTextFromPDF = require("../utils/simplePdfReader");
 
+/**
+ * Normalize text for matching
+ * - Convert to lowercase
+ * - Remove extra spaces
+ * - Remove special characters
+ */
+function normalizeText(text) {
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, " ") // Normalize multiple spaces to single space
+    .replace(/[^\w\s]/g, "") // Remove special characters, keep only letters, numbers, spaces
+    .trim();
+}
+
+/**
+ * Extract medicine names from PDF text (Brand & Strength column)
+ */
+function extractMedicinesFromBrandStrength(text) {
+  const lines = text.split("\n").map(l => l.trim()).filter(l => l);
+  let startIdx = -1;
+
+  // Find "Brand & Strength" header
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].toLowerCase().includes("brand") && lines[i].toLowerCase().includes("strength")) {
+      startIdx = i;
+      console.log("Found Brand & Strength header at line " + (i + 1));
+      break;
+    }
+  }
+
+  if (startIdx === -1) {
+    console.log("ERROR: Could not find Brand & Strength header");
+    return [];
+  }
+
+  const medicines = [];
+  const endMarkers = ["investigation", "observation", "diagnosis", "note", "instruction"];
+
+  // Extract medicines from lines after header
+  for (let i = startIdx + 1; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Stop if we reach another section
+    if (endMarkers.some(m => line.toLowerCase().includes(m))) {
+      console.log("Reached end of medicines section");
+      break;
+    }
+
+    if (!line || line.length === 0) continue;
+    if (line.includes("---")) continue;
+
+    // Extract first column (Brand & Strength is first column)
+    let medName = line;
+
+    // Handle pipe-separated columns
+    if (line.includes("|")) {
+      medName = line.split("|")[0];
+    } else {
+      // Handle space-separated columns
+      const parts = line.split(/\s{2,}/);
+      medName = parts[0];
+    }
+
+    // Remove leading numbers (1., 2), etc.)
+    medName = medName.replace(/^\d+[\.\)]\s*/, "").trim();
+
+    // Validate medicine name
+    if (medName && medName.length >= 3 && /[a-zA-Z]/.test(medName)) {
+      medicines.push(medName);
+      console.log("Extracted: " + medName);
+    }
+  }
+
+  return medicines;
+}
+
+/**
+ * Match extracted medicine with database
+ * Uses both medicine.description and medicine.normalizedName
+ */
+function findMatchInDatabase(extractedName, dbMedicines) {
+  const extractedNormalized = normalizeText(extractedName);
+
+  console.log("Searching for: \"" + extractedName + "\"");
+  console.log("Normalized: \"" + extractedNormalized + "\"");
+
+  // Try to find exact match using normalized names
+  for (const dbMed of dbMedicines) {
+    // Match 1: Compare with medicine.normalizedName (if it exists)
+    if (dbMed.normalizedName) {
+      if (dbMed.normalizedName === extractedNormalized) {
+        console.log("MATCH (via normalizedName): " + dbMed.description);
+        return dbMed;
+      }
+    }
+
+    // Match 2: Normalize description and compare
+    if (dbMed.description) {
+      const dbNormalized = normalizeText(dbMed.description);
+      if (dbNormalized === extractedNormalized) {
+        console.log("MATCH (via description): " + dbMed.description);
+        return dbMed;
+      }
+    }
+  }
+
+  console.log("NO MATCH found");
+  return null;
+}
+
 exports.extractMedicines = async (req, res) => {
   let filePath = null;
 
   try {
-    console.log("\n========== PRESCRIPTION UPLOAD START ==========");
+    console.log("\n" + "=".repeat(80));
+    console.log("PDF PRESCRIPTION UPLOAD");
+    console.log("=".repeat(80));
 
-    // Check file
     if (!req.file) {
-      console.log("ERROR: No file uploaded");
-      return res.status(400).json({
+      return res.json({
         success: false,
         message: "No file uploaded",
         matchedCount: 0,
@@ -20,29 +131,44 @@ exports.extractMedicines = async (req, res) => {
     }
 
     filePath = req.file.path;
-    console.log("File received: " + req.file.originalname);
-    console.log("File path: " + filePath);
+    const fileName = req.file.originalname;
+    const mimeType = req.file.mimetype;
 
-    // Extract text from PDF (may use OCR for scanned PDFs)
+    console.log("File: " + fileName);
+    console.log("MIME Type: " + mimeType);
+
+    const isPDF = mimeType.includes("pdf") || fileName.toLowerCase().endsWith(".pdf");
+
+    if (!isPDF) {
+      if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      return res.json({
+        success: false,
+        message: "Only PDF files are supported. Please upload a prescription PDF.",
+        matchedCount: 0,
+        medicines: [],
+      });
+    }
+
+    // Extract text from PDF
     console.log("Extracting text from PDF...");
     let pdfText = "";
 
     try {
       pdfText = await extractTextFromPDF(filePath);
-      console.log("Successfully extracted: " + pdfText.length + " characters");
+      console.log("PDF text extracted: " + pdfText.length + " characters\n");
     } catch (pdfErr) {
-      console.log("ERROR in PDF extraction: " + pdfErr.message);
+      console.log("PDF extraction error: " + pdfErr.message);
       if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+
       return res.json({
         success: false,
-        message: "Could not read PDF: " + pdfErr.message,
+        message: "Could not read PDF. Please ensure it's a text-based PDF (not scanned/image-based).",
         matchedCount: 0,
         medicines: [],
       });
     }
 
     if (!pdfText || pdfText.trim().length === 0) {
-      console.log("ERROR: No text extracted from PDF");
       if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
       return res.json({
         success: false,
@@ -52,86 +178,94 @@ exports.extractMedicines = async (req, res) => {
       });
     }
 
-    // Extract medicines
-    console.log("Extracting medicines...");
-    const medicines = extractMedicinesFromText(pdfText);
-    console.log("Medicines found: " + medicines.length);
+    // Extract medicines from Brand & Strength column
+    console.log("STEP 1: Extracting medicines from Brand & Strength column...");
+    const extractedMedicines = extractMedicinesFromBrandStrength(pdfText);
+    console.log("Total extracted: " + extractedMedicines.length + " medicines\n");
 
-    if (medicines.length === 0) {
-      console.log("ERROR: No medicines extracted");
+    if (extractedMedicines.length === 0) {
       if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
       return res.json({
         success: false,
-        message: "No medicines found in Brand & Strength section",
+        message: "No medicines found in Brand & Strength column",
         matchedCount: 0,
         medicines: [],
       });
     }
 
-    // List extracted medicines
-    console.log("Extracted medicines:");
-    medicines.forEach((m, i) => {
-      console.log("  " + (i + 1) + ". " + m);
-    });
+    // Load all medicines from database
+    console.log("STEP 2: Loading medicines from database...");
+    const dbMedicines = await Medicine.find({}).lean();
+    console.log("Total in database: " + dbMedicines.length + " medicines\n");
 
-    // Get medicines from database
-    console.log("Loading medicines from database...");
-    const dbMedicines = await Medicine.find().lean();
-    console.log("Total medicines in database: " + dbMedicines.length);
+    // Match extracted medicines with database
+    console.log("STEP 3: Matching extracted medicines with database...");
+    console.log("-".repeat(80));
 
-    // Match medicines
-    console.log("Matching medicines...");
-    const matched = [];
+    const matchedMedicines = [];
+    const unmatchedMedicines = [];
 
-    for (const med of medicines) {
-      const found = dbMedicines.find(db =>
-        db.description && db.description.toUpperCase() === med.toUpperCase()
-      );
+    for (const extractedName of extractedMedicines) {
+      console.log("");
+      const dbMedicine = findMatchInDatabase(extractedName, dbMedicines);
 
-      if (found) {
-        console.log("MATCH: " + med);
-        matched.push({
-          medicineId: found._id.toString(),
-          name: found.description,
-          description: found.description,
-          mfr: found.mfr || "N/A",
-          price: found.netValue || found.newMrp || 0,
-          mrp: found.newMrp || 0,
-          qty: found.qty || 0,
-          stock: found.qty || 0,
-          pack: found.pack || "N/A",
-          gstPercent: found.gstPercent || 0,
-          discPercent: found.discPercent || 0,
-          vendor: found.vendor || "N/A",
-          batchNo: found.batchNo || "",
-          hsnCode: found.hsnCode || "",
+      if (dbMedicine) {
+        matchedMedicines.push({
+          medicineId: dbMedicine._id.toString(),
+          name: dbMedicine.description,
+          description: dbMedicine.description,
+          mfr: dbMedicine.mfr || "N/A",
+          price: dbMedicine.netValue || dbMedicine.newMrp || 0,
+          mrp: dbMedicine.newMrp || 0,
+          qty: dbMedicine.qty || 0,
+          stock: dbMedicine.qty || 0,
+          pack: dbMedicine.pack || "N/A",
+          gstPercent: dbMedicine.gstPercent || 0,
+          discPercent: dbMedicine.discPercent || 0,
+          vendor: dbMedicine.vendor || "N/A",
+          batchNo: dbMedicine.batchNo || "",
+          hsnCode: dbMedicine.hsnCode || "",
         });
       } else {
-        console.log("NO MATCH: " + med);
+        unmatchedMedicines.push({
+          name: extractedName,
+        });
       }
     }
 
-    console.log("Matched: " + matched.length + " / " + medicines.length);
+    console.log("-".repeat(80));
+    console.log("\nSTEP 4: MATCHING RESULTS");
+    console.log("Matched: " + matchedMedicines.length);
+    console.log("Unmatched: " + unmatchedMedicines.length);
 
-    // Cleanup
+    if (unmatchedMedicines.length > 0) {
+      console.log("\nUnmatched medicines:");
+      unmatchedMedicines.forEach((med, i) => {
+        console.log("  " + (i + 1) + ". " + med.name);
+      });
+    }
+
+    // Cleanup file
     if (filePath && fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
     }
 
-    console.log("========== PRESCRIPTION UPLOAD COMPLETE ==========\n");
+    console.log("\n" + "=".repeat(80) + "\n");
 
     return res.json({
-      success: matched.length > 0,
-      message: matched.length > 0
-        ? "Found " + matched.length + " matching medicines"
-        : "No matching medicines found",
-      matchedCount: matched.length,
-      medicines: matched,
+      success: matchedMedicines.length > 0,
+      message: matchedMedicines.length > 0
+        ? "Found " + matchedMedicines.length + " matching medicine(s) in inventory"
+        : "No matching medicines found in database",
+      matchedCount: matchedMedicines.length,
+      unmatchedCount: unmatchedMedicines.length,
+      medicines: matchedMedicines,
+      unmatchedMedicines: unmatchedMedicines,
     });
 
   } catch (error) {
-    console.log("ERROR: " + error.message);
-    console.log("Stack: " + error.stack);
+    console.error("ERROR: " + error.message);
+    console.error("Stack: " + error.stack);
 
     if (filePath && fs.existsSync(filePath)) {
       try {
@@ -147,45 +281,3 @@ exports.extractMedicines = async (req, res) => {
     });
   }
 };
-
-function extractMedicinesFromText(text) {
-  const lines = text.split("\n").map(l => l.trim()).filter(l => l);
-  let startIdx = -1;
-
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].toLowerCase().includes("brand") && lines[i].toLowerCase().includes("strength")) {
-      startIdx = i;
-      break;
-    }
-  }
-
-  if (startIdx === -1) return [];
-
-  const medicines = [];
-  const endMarkers = ["investigation", "observation", "diagnosis"];
-
-  for (let i = startIdx + 1; i < lines.length; i++) {
-    const line = lines[i];
-
-    if (endMarkers.some(m => line.toLowerCase().includes(m))) break;
-    if (!line || line.length === 0) continue;
-    if (line.includes("---") || line.includes("---")) continue;
-
-    let medName = line;
-
-    if (line.includes("|")) {
-      medName = line.split("|")[0];
-    } else {
-      const parts = line.split(/\s{2,}/);
-      medName = parts[0];
-    }
-
-    medName = medName.replace(/^\d+[\.\)]\s*/, "").trim();
-
-    if (medName.length >= 3 && /[a-zA-Z]/.test(medName)) {
-      medicines.push(medName);
-    }
-  }
-
-  return medicines;
-}
