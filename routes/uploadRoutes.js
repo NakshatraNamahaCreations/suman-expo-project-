@@ -11,17 +11,44 @@ const storage = multer.diskStorage({
     cb(null, `${Date.now()}-${Math.round(Math.random() * 1e6)}${ext}`);
   },
 });
-const upload = multer({ storage });
+
+// File filter to accept PDF, images, and Excel files
+const fileFilter = (req, file, cb) => {
+  const allowed = [
+    "application/pdf",
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/webp",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel",
+    "text/csv",
+    "application/octet-stream",
+  ];
+
+  if (allowed.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error(`File type not allowed: ${file.mimetype}`), false);
+  }
+};
+
+const upload = multer({
+  storage,
+  fileFilter,
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB for PDFs and spreadsheets
+});
 
 // Middleware to log file uploads
 const logUpload = (req, res, next) => {
   if (req.file) {
-    console.log(`📤 File uploaded: ${req.file.originalname}`);
-    console.log(`   Path: ${req.file.path}`);
-    console.log(`   Size: ${req.file.size} bytes`);
-    console.log(`   Mimetype: ${req.file.mimetype}`);
+    console.log(`\n📤 FILE UPLOAD RECEIVED`);
+    console.log(`   Original Name: ${req.file.originalname}`);
+    console.log(`   Saved Path: ${req.file.path}`);
+    console.log(`   File Size: ${req.file.size} bytes`);
+    console.log(`   MIME Type: ${req.file.mimetype}`);
   } else {
-    console.log(`⚠️  No file in request for: ${req.path}`);
+    console.log(`\n⚠️  NO FILE IN REQUEST for: ${req.path}`);
   }
   next();
 };

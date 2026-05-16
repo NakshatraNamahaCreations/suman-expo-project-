@@ -317,12 +317,21 @@ exports.extractMedicines = async (req, res) => {
       fileType = "pdf";
       console.log("📄 Processing PDF file...");
       try {
+        console.log(`   📄 PDF Path: ${filePath}`);
+        console.log(`   📄 File exists check: ${fs.existsSync(filePath)}`);
         extractedText = await extractTextFromPDF(filePath);
-        console.log(
-          `   ✓ Extracted ${extractedText?.length || 0} characters from PDF`
-        );
+        if (!extractedText || extractedText.trim().length === 0) {
+          console.warn(`   ⚠️  PDF extraction returned empty text`);
+        } else {
+          console.log(
+            `   ✓ Extracted ${extractedText.length} characters from PDF`
+          );
+        }
       } catch (err) {
-        console.error("   ✗ PDF extraction failed:", err.message);
+        console.error("   ✗ PDF extraction failed");
+        console.error("      Error:", err.message);
+        console.error("      Stack:", err.stack?.substring(0, 300));
+        throw err; // Re-throw to be handled by outer catch
       }
     } else if (mimetype.startsWith("image/")) {
       fileType = "image";
@@ -371,7 +380,10 @@ exports.extractMedicines = async (req, res) => {
     // ══════════════════════════════════════════════════════════════
     // EXTRACT MEDICINES FROM TEXT
     // ══════════════════════════════════════════════════════════════
-    if (extractedText && extractedMedicines.length === 0) {
+    if (!extractedText || extractedText.trim().length === 0) {
+      console.log("⚠️  No text extracted from file");
+    } else {
+      console.log(`📝 Extracted text length: ${extractedText.length} characters`);
       console.log("🔍 Extracting medicine names from text...");
 
       // Strategy 1: Try to extract from Brand & Strength column

@@ -7,7 +7,11 @@ const { extractTextFromImage } = require("./imageOCR");
 const pdfParse = pdfParseLib.default || pdfParseLib;
 
 const extractTextFromPDF = async (filePath) => {
-  console.log("📄 Starting PDF extraction:", { filePath, fileExists: fs.existsSync(filePath) });
+  console.log("\n📄 ═══════════════════════════════════");
+  console.log("📄 PDF EXTRACTION STARTING");
+  console.log("📄 ═══════════════════════════════════");
+  console.log(`   File Path: ${filePath}`);
+  console.log(`   File Exists: ${fs.existsSync(filePath)}`);
 
   try {
     if (!fs.existsSync(filePath)) {
@@ -15,36 +19,43 @@ const extractTextFromPDF = async (filePath) => {
     }
 
     const stats = fs.statSync(filePath);
-    console.log(`📄 PDF file size: ${stats.size} bytes`);
+    console.log(`   File Size: ${stats.size} bytes`);
 
     const dataBuffer = fs.readFileSync(filePath);
-    console.log(`📄 File read successfully, buffer size: ${dataBuffer.length} bytes`);
+    console.log(`   Buffer Read: ${dataBuffer.length} bytes`);
 
-    console.log("📄 Parsing PDF with pdf-parse...");
+    console.log("   📄 Parsing with pdf-parse...");
     const pdfData = await pdfParse(dataBuffer);
-    console.log(`📄 pdf-parse completed, pages: ${pdfData.numpages}, text length: ${pdfData.text?.length || 0}`);
+    console.log(`   ✓ Parse Success: ${pdfData.numpages} pages, ${pdfData.text?.length || 0} chars`);
 
     const text = pdfData.text?.trim();
 
     // ✅ If PDF has readable text
     if (text && text.length > 20) {
-      console.log(`✅ PDF parsed successfully, extracted ${text.length} characters`);
-      return text; // Don't lowercase - preserve case for better medicine detection
+      console.log(`   ✅ TEXT EXTRACTED: ${text.length} characters`);
+      console.log("📄 ═══════════════════════════════════");
+      return text;
     }
 
-    console.log(`⚠️  PDF text too short (${text?.length || 0} chars), falling back to OCR`);
+    console.log(`   ⚠️  TEXT TOO SHORT: ${text?.length || 0} chars, trying OCR...`);
     throw new Error("Empty or insufficient PDF text");
 
   } catch (err) {
-    console.log("❌ PDF parse failed → using OCR");
-    console.log("Error details:", { message: err.message, stack: err.stack?.substring(0, 200) });
+    console.log(`   ❌ PDF PARSE ERROR: ${err.message}`);
+    console.log(`      Stack: ${err.stack?.substring(0, 300)}`);
 
     // 🔥 FALLBACK TO OCR
-    console.log("🔥 Attempting OCR fallback...");
-    const ocrText = await extractTextFromImage(filePath);
-    console.log(`🔥 OCR fallback returned: ${ocrText?.length || 0} characters`);
-
-    return ocrText; // Don't lowercase - preserve case for better medicine detection
+    console.log("   🔥 Attempting OCR fallback...");
+    try {
+      const ocrText = await extractTextFromImage(filePath);
+      console.log(`   🔥 OCR SUCCESS: ${ocrText?.length || 0} characters`);
+      console.log("📄 ═══════════════════════════════════");
+      return ocrText;
+    } catch (ocrErr) {
+      console.log(`   🔥 OCR ALSO FAILED: ${ocrErr.message}`);
+      console.log("📄 ═══════════════════════════════════");
+      throw new Error(`PDF and OCR extraction failed: ${err.message} | ${ocrErr.message}`);
+    }
   }
 };
 
