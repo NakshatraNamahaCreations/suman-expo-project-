@@ -39,11 +39,11 @@ const extractTextFromPDF = async (filePath) => {
       text = "";
     }
 
-    // If PDF parsing returned any text at all, use it (even if short)
-    if (text && text.length > 20) {
+    // If PDF parsing returned text, use it
+    if (text && text.length > 50) {
       console.log("\n✅ TEXT EXTRACTED FROM PDF");
       console.log("\n" + "─".repeat(80));
-      console.log("📋 EXTRACTED TEXT (from pdf-parse):");
+      console.log("📋 EXTRACTED TEXT (full):");
       console.log("─".repeat(80));
       console.log(text);
       console.log("─".repeat(80));
@@ -51,24 +51,47 @@ const extractTextFromPDF = async (filePath) => {
       return text;
     }
 
-    // If pdf-parse returned very little text, log warning but don't try OCR
-    // OCR is too slow on free tier servers and causes timeouts
-    if (!text || text.length < 20) {
-      console.log("\n⚠️  PDF text extraction minimal or empty");
-      console.log("   Skipping OCR (too slow on free tier server)");
-      console.log("   Returning what pdf-parse extracted");
+    // If PDF parsing returned little/no text, try OCR with timeout
+    if (!text || text.length < 50) {
+      console.log("\n⚠️  PDF text too short or empty, attempting OCR...");
+      console.log("   This might be a scanned/image-based PDF");
 
-      if (text && text.length > 0) {
-        console.log(`   Found ${text.length} characters`);
-        return text;
+      try {
+        console.log("\n   Attempting OCR extraction...");
+
+        // Create OCR promise with 8 second timeout
+        const ocrPromise = extractTextFromImage(filePath);
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("OCR extraction timeout")), 8000)
+        );
+
+        const ocrText = await Promise.race([ocrPromise, timeoutPromise]);
+
+        if (ocrText && ocrText.trim().length > 50) {
+          console.log(`\n✅ OCR EXTRACTION SUCCESSFUL`);
+          console.log(`   Extracted ${ocrText.length} characters`);
+          console.log("\n" + "─".repeat(80));
+          console.log("📋 EXTRACTED TEXT (via OCR):");
+          console.log("─".repeat(80));
+          console.log(ocrText);
+          console.log("─".repeat(80));
+          console.log("═".repeat(80));
+          return ocrText;
+        } else {
+          console.log(`⚠️  OCR returned insufficient text (${ocrText?.length || 0} chars)`);
+        }
+      } catch (ocrErr) {
+        console.error(`❌ OCR error: ${ocrErr.message}`);
       }
 
-      // If truly nothing, throw error
-      if (!pdfData || pdfData.numpages === 0) {
-        throw new Error("Could not extract text from PDF - file may be corrupted or image-based");
+      // Both failed
+      if (!text && (!pdfData || pdfData.numpages === 0)) {
+        throw new Error("Could not extract text from PDF using pdf-parse or OCR");
       }
 
-      throw new Error("PDF text extraction returned empty string");
+      // Return whatever we got
+      if (text) return text;
+      throw new Error("PDF is image-based and OCR extraction failed");
     }
 
     return text;
