@@ -1,669 +1,328 @@
-  const Prescription = require("../models/Prescription");
-  const Medicine = require("../models/Medicine");
-  const fs = require("fs");
-  const XLSX = require("xlsx");
+const Prescription = require("../models/Prescription");
+const Medicine = require("../models/Medicine");
+const fs = require("fs");
+const XLSX = require("xlsx");
+const extractTextFromPDF = require("../utils/pdfReader");
+const { extractTextFromImage, parsePrescriptionText } = require("../utils/imageOCR");
 
-  const extractTextFromPDF = require("../utils/pdfReader");
-  const generateStyledPDF = require("../utils/generateStyledPDF");
-  const { extractTextFromImage, parsePrescriptionText } = require("../utils/imageOCR");
+/* ════════════════════════════════════════════════════════════════
+   HELPER: Simple Medicine Matching
+   ════════════════════════════════════════════════════════════════ */
+function matchMedicineToDatabase(medicineName, dbMedicines) {
+  if (!medicineName || medicineName.trim().length < 2) return null;
 
-  // Smart medicine matcher factory — searches description, mfr, and normalizedName
-  function buildMatcher(dbMedicines) {
-    return function findDBMatch(medName) {
-      if (!medName || medName.trim().length < 3) return null;
+  const searchName = medicineName.toLowerCase().trim();
 
-      const searchLower = medName.toLowerCase().trim();
-      const searchTokens = searchLower.split(/\s+/).filter(t => t.length >= 3);
-
-      // Fields to search: description (main), mfr (brand/manufacturer), normalizedName
-      const getSearchFields = (dbMed) => [
-        dbMed.description || "",
-        dbMed.mfr || "",
-        dbMed.normalizedName || ""
-      ];
-
-      // Find best match across all strategies
-      let bestMatch = null;
-      let bestScore = 0;
-
-      for (const dbMed of dbMedicines) {
-        const fields = getSearchFields(dbMed);
-
-        for (const field of fields) {
-          const fieldLower = field.toLowerCase();
-          if (!fieldLower) continue;
-
-          // Strategy 1: Exact field match (highest priority)
-          if (fieldLower === searchLower) {
-            return dbMed;
-          }
-
-          // Strategy 2: Token overlap scoring
-          if (searchTokens.length >= 1) {
-            const hits = searchTokens.filter(t => fieldLower.includes(t)).length;
-            const score = hits / Math.max(searchTokens.length, 1);
-            if (score > bestScore) {
-              bestScore = score;
-              bestMatch = dbMed;
-            }
-          }
-        }
-      }
-
-      // Return best token match if score >= 0.5 (50%+ tokens match)
-      if (bestScore >= 0.5 && bestMatch) return bestMatch;
-
-      // Strategy 3: Substring match (with strength stripping)
-      const stripped = searchLower.replace(/\s+/g, "");
-      return dbMedicines.find(dbMed => {
-        const fields = getSearchFields(dbMed);
-        return fields.some(field => {
-          const fieldStripped = field.toLowerCase()
-            .replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "")
-            .replace(/\s+/g, "");
-          return (fieldStripped && stripped &&
-                  (fieldStripped.includes(stripped) || stripped.includes(fieldStripped)));
-        });
-      }) || null;
-    };
+  // Strategy 1: Exact match (100% match)
+  let match = dbMedicines.find(
+    (med) => (med.description || "").toLowerCase() === searchName
+  );
+  if (match) {
+    console.log(`     ✓ Strategy 1 (Exact): "${medicineName}" → "${match.description}"`);
+    return match;
   }
 
-
-  exports.savePrescription = async (req, res) => {
-    try {
-      const {
-        rxId,
-        doctor,
-        medicines,
-        subtotal,
-        gst,
-        total
-      } = req.body;
-
-
-    if (!medicines || medicines.length === 0) {
-    return res.status(400).json({
-      success: false,
-      message: "No medicines found in prescription"
-    });
+  // Strategy 2: Partial match - check if search string is contained in description
+  match = dbMedicines.find((med) => {
+    const desc = (med.description || "").toLowerCase();
+    return desc.includes(searchName) || searchName.includes(desc);
+  });
+  if (match) {
+    console.log(`     ✓ Strategy 2 (Partial): "${medicineName}" → "${match.description}"`);
+    return match;
   }
 
+  // Strategy 3: Token matching - split by spaces and match tokens
+  const searchTokens = searchName.split(/\s+/).filter((t) => t.length >= 2);
+  if (searchTokens.length > 0) {
+    let bestMatch = null;
+    let bestScore = 0;
 
-      const savedPrescription = await Prescription.create({
-        rxId,
-        doctor,
-        date: new Date(),
-        
-        meds: medicines
-        .filter(m => m.medicineId) // 🔥 IMPORTANT     
-        .map(m => ({
-          medicine: m.medicineId,
-          qty: m.qty,
-          freq: m.freq,
-          duration: m.duration,
-          price: m.price,
-          subtotal: m.subtotal
-        })),
-        subtotal,
-        gst,
-        total,
-        payStatus: "Unpaid"
-      });
+    for (const med of dbMedicines) {
+      const desc = (med.description || "").toLowerCase();
+      const matchingTokens = searchTokens.filter((token) =>
+        desc.includes(token)
+      );
+      const score = matchingTokens.length / searchTokens.length;
 
-      res.json({
-        success: true,
-        prescriptionId: savedPrescription._id
-      });
-
-    } catch (error) {
-      res.status(500).json({ error: error.message });
+      if (score > bestScore && score >= 0.4) {
+        bestScore = score;
+        bestMatch = med;
+      }
     }
-  };
 
-
-  // ============================
-  // IMAGE PRESCRIPTION UPLOAD (camera/gallery)
-  // ============================
-  exports.processImagePrescription = async (req, res) => {
-    try {
-      if (!req.file) {
-        return res.status(400).json({ message: "No file uploaded" });
-      }
-
-      const filePath = req.file.path;
-      const dbMedicines = await Medicine.find({ status: "Active" });
-      const matchedMeds = [];
-
-      // Helper: match parsed medicine name to DB for pricing
-      const findDBMatch = buildMatcher(dbMedicines);
-
-      // ── STEP 1: OCR (OCR.space API → Tesseract fallback) ──
-      let extractedText = "";
-      try {
-        extractedText = await extractTextFromImage(filePath);
-      } catch (ocrErr) {
-        console.log("OCR failed:", ocrErr.message);
-      }
-
-      // ── STEP 2: Parse structured medicines from text ──
-      const parsed = parsePrescriptionText(extractedText);
-      const addedNames = new Set();
-
-      for (const parsedMed of parsed.medicines) {
-        const dbMatch = findDBMatch(parsedMed.name);
-        const price = dbMatch ? (dbMatch.newMrp || dbMatch.price || 0) : 0;
-        const name = dbMatch?.description || parsedMed.name;
-
-        addedNames.add(name.toLowerCase());
-        const stock = dbMatch?.qty ?? 0;
-        matchedMeds.push({
-          medicineId: dbMatch?._id || null,
-          name,
-          category: dbMatch?.category || "Tablet",
-          unit: dbMatch?.pack || "Tablet",
-          dosage: parsedMed.dosage,
-          freq: parsedMed.freq,
-          freqLabel: parsedMed.freqLabel,
-          duration: parsedMed.duration,
-          qty: parsedMed.qty,
-          price,
-          subtotal: parsedMed.qty * price,
-          stock,
-          inStock: stock >= parsedMed.qty,
-        });
-      }
-
-      // ── STEP 3: ALWAYS scan OCR text against DB medicines ──
-      // This catches medicines the parser missed (table formats, no prefix, etc.)
-      if (extractedText) {
-        // Extract all durations mentioned in the text for context
-        const allDurations = [];
-      const durRegex = /\b(\d{1,3})\s*(?:days?|d\b)\b/gi;
-        let dm;
-        while ((dm = durRegex.exec(extractedText)) !== null) {
-          allDurations.push(parseInt(dm[1], 10));
-        }
-
-        // Frequency patterns in the full text
-        const freqInText = /1\s*[-–—.,]\s*0\s*[-–—.,]\s*1/i.test(extractedText) ? { m: 1, a: 0, n: 1, label: "1-0-1" }
-          : /1\s*[-–—.,]\s*1\s*[-–—.,]\s*1/i.test(extractedText) ? { m: 1, a: 1, n: 1, label: "1-1-1" }
-          : /\bbd\b|\btwice/i.test(extractedText) ? { m: 1, a: 0, n: 1, label: "1-0-1" }
-          : /\btds\b|\bthrice/i.test(extractedText) ? { m: 1, a: 1, n: 1, label: "1-1-1" }
-          : { m: 1, a: 0, n: 1, label: "1-0-1" };
-
-        for (const med of dbMedicines) {
-          if (addedNames.has((med.description || "").toLowerCase())) continue;
-
-          const baseName = (med.description || "").toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").trim();
-          if (baseName.length < 3) continue;
-
-          // Check if medicine name appears in OCR text
-          if (extractedText.includes(baseName)) {
-            // Try to find a duration near this medicine in the text
-            const medIdx = extractedText.indexOf(baseName);
-            const nearbyText = extractedText.substring(Math.max(0, medIdx - 50), medIdx + baseName.length + 80);
-        
-        
-    const nearDur = nearbyText.match(/(\d{1,3})\s*(?:days?)/i);
-
-  let duration = 5;
-
-  if (nearDur) {
-    duration = parseInt(nearDur[1], 10);
-
-    // 🔥 FIX: handle merged values like 130
-    const freqMatch = nearbyText.match(/(\d)[-–—.,](\d)[-–—.,](\d)/);
-
-    if (freqMatch && duration > 90) {
-      const freqDigits = freqMatch[1] + freqMatch[2] + freqMatch[3]; // "101"
-
-      if (duration.toString().startsWith(freqDigits)) {
-        // remove frequency part from duration
-        duration = parseInt(duration.toString().slice(freqDigits.length), 10);
-      }
+    if (bestMatch) {
+      console.log(`     ✓ Strategy 3 (Token ${(bestMatch ? 100 * bestScore : 0).toFixed(0)}%): "${medicineName}" → "${bestMatch.description}"`);
+      return bestMatch;
     }
   }
-            // Try to find frequency near this medicine
-            let freq = { ...freqInText };
-            let freqLabel = freqInText.label;
-            const nearFreq = nearbyText.match(/(\d)\s*[-–—.,]\s*(\d)\s*[-–—.,]\s*(\d)/);
-            if (nearFreq) {
-              freq = { m: parseInt(nearFreq[1]), a: parseInt(nearFreq[2]), n: parseInt(nearFreq[3]) };
-              freqLabel = `${freq.m}-${freq.a}-${freq.n}`;
-            }
 
-            const daily = freq.m + freq.a + freq.n;
-            const qty = daily * duration;
-            const price = med.sellingPrice || med.price || 0;
+  console.log(`     ✗ No match: "${medicineName}"`);
+  return null;
+}
 
-            addedNames.add((med.description || "").toLowerCase());
-            matchedMeds.push({
-              medicineId: med._id,
-              name: med.description,
-              category: med.category,
-              unit: med.pack,
-              dosage: "",
-              freq,
-              freqLabel,
-              duration,
-              qty,
-              price,
-              subtotal: qty * price,
-              stock: med.qty || 0,
-              inStock: (med.qty || 0) >= qty,
-            });
-          }
-        }
-      }
-
-      // Only keep medicines that matched database (have a medicineId)
-      const validMeds = matchedMeds.filter(m => m.medicineId);
-      console.log(`Final matched: ${matchedMeds.length} raw → ${validMeds.length} valid`, validMeds.map(m => `${m.name} ${m.freqLabel} ${m.duration}d qty:${m.qty} ₹${m.subtotal}`));
-
-      const subtotal = validMeds.reduce((sum, m) => sum + m.subtotal, 0);
-      const gst = Math.round(subtotal * 0.05 * 100) / 100;
-      const total = subtotal + gst;
-
-      
-      // Clean up uploaded file
-      try { fs.unlinkSync(filePath); } catch {}
-
-      res.json({
-        success: true,
-        message: validMeds.length > 0
-          ? `Found ${validMeds.length} medicine(s) in prescription`
-          : "Prescription uploaded. Our pharmacist will verify and add medicines.",
-        prescription: {
-          rxId: `RX-${Date.now()}`,
-          doctor: parsed.doctor || "To be verified",
-          date: new Date().toISOString(),
-          medsCount: validMeds.length,
-          medicines: validMeds,
-          subtotal,
-          gst,
-          total,
-        },
-      });
-    } catch (error) {
-      console.error("IMAGE UPLOAD ERROR:", error);
-      res.status(500).json({ message: "Error processing image", error: error.message });
-    }
-  };
-
-  // ============================
-  // PDF PRESCRIPTION UPLOAD
-  // ============================
-  exports.processPDFPrescription = async (req, res) => {
-    try {
-      if (!req.file) {
-        return res.status(400).json({ message: "No file uploaded" });
-      }
-
-      const filePath = req.file.path;
-
-      // Extract text from PDF
-      const text = await extractTextFromPDF(filePath);
-      console.log("PDF EXTRACTED TEXT:", text);
-
-      // Parse medicines
-      const parsed = parsePrescriptionText(text);
-      const dbMedicines = await Medicine.find({ status: "Active" });
-      const matchedMeds = [];
-      const addedNames = new Set();
-
-      const findDBMatch = buildMatcher(dbMedicines);
-
-      // From parser
-      for (const parsedMed of parsed.medicines) {
-        const dbMatch = findDBMatch(parsedMed.name);
-        const price = dbMatch ? (dbMatch.newMrp || dbMatch.price || 0) : 0;
-        const name = dbMatch?.description || parsedMed.name;
-        addedNames.add(name.toLowerCase());
-        matchedMeds.push({
-          medicineId: dbMatch?._id || null,
-          name,
-          category: dbMatch?.category || "Tablet",
-          unit: dbMatch?.pack || "Tablet",
-          dosage: parsedMed.dosage,
-          freq: parsedMed.freq,
-          freqLabel: parsedMed.freqLabel,
-          duration: parsedMed.duration,
-          qty: parsedMed.qty,
-          price,
-          subtotal: parsedMed.qty * price,
-          stock: dbMatch?.qty || 0,
-          inStock: (dbMatch?.qty || 0) >= parsedMed.qty,
-        });
-      }
-
-      // Fallback: text match against DB
-      if (matchedMeds.length === 0 && text) {
-        for (const med of dbMedicines) {
-          const baseName = (med.description || "").toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").trim();
-          if (baseName.length >= 4 && text.includes(baseName) && !addedNames.has((med.description || "").toLowerCase())) {
-            const freq = { m: 1, a: 0, n: 1 };
-            const duration = 5;
-            const daily = 2;
-            const qty = daily * duration;
-            const price = med.newMrp || med.price || 0;
-            addedNames.add((med.description || "").toLowerCase());
-            matchedMeds.push({
-              medicineId: med._id, name: med.description, category: med.category, unit: med.pack,
-              dosage: "", freq, freqLabel: "1-0-1", duration, qty, price, subtotal: qty * price,
-              stock: med.qty || 0, inStock: (med.qty || 0) >= qty,
-            });
-          }
-        }
-      }
-
-      console.log(`PDF matched ${matchedMeds.length} medicines`);
-
-      const subtotal = matchedMeds.reduce((sum, m) => sum + m.subtotal, 0);
-      const gst = Math.round(subtotal * 0.05 * 100) / 100;
-      const total = subtotal + gst;
-
-      // Clean up
-      try { fs.unlinkSync(filePath); } catch {}
-
-      res.json({
-        success: true,
-        message: matchedMeds.length > 0
-          ? `Found ${matchedMeds.length} medicine(s) in PDF`
-          : "PDF uploaded. Our pharmacist will verify.",
-        prescription: {
-          rxId: `RX-${Date.now()}`,
-          doctor: parsed.doctor || "To be verified",
-          date: new Date().toISOString(),
-          medsCount: matchedMeds.length,
-          medicines: matchedMeds,
-          subtotal,
-          gst,
-          total,
-        },
-      });
-    } catch (error) {
-      console.error("PDF UPLOAD ERROR:", error);
-      res.status(500).json({ message: "Error processing PDF", error: error.message });
-    }
-  };
-
-// ============================
-// UNIFIED MEDICINE EXTRACTION
-// (Handles PDF, Image, Excel)
-// ============================
+/* ════════════════════════════════════════════════════════════════
+   EXTRACT MEDICINES FROM UPLOADED FILE
+   ════════════════════════════════════════════════════════════════ */
 exports.extractMedicines = async (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ success: false, message: "No file uploaded" });
-    }
-
-    const { mimetype, path: filePath } = req.file;
-    console.log("📥 Extracting medicines from file:", { mimetype, filePath });
-
-    let matchedMeds = [];
-    let doctor = "To be verified";
-    let fileType = "unknown";
-
-    const dbMedicines = await Medicine.find({ status: "Active" });
-    console.log(`📚 Loaded ${dbMedicines.length} medicines from database`);
-    if (dbMedicines.length > 0) {
-      console.log(`   Sample medicines: ${dbMedicines.slice(0, 10).map(m => m.description).join(", ")}${dbMedicines.length > 10 ? "..." : ""}`);
-    } else {
-      console.log(`   ⚠️  WARNING: No active medicines in database!`);
-    }
-
-    // ── Helper: Match medicine names to DB (using description field ONLY) ──
-    const baseFindDBMatch = buildMatcher(dbMedicines);
-    const findDBMatch = (medName) => {
-      const match = baseFindDBMatch(medName);
-      if (match) {
-        console.log(`✅ Matched: "${medName}" → "${match.description}"`);
-      } else if (medName && medName.trim().length >= 3) {
-        console.log(`❌ No match for: "${medName}"`);
-        console.log(`   Sample DB medicines: ${dbMedicines.slice(0, 5).map(m => m.description).join(", ")}`);
-      }
-      return match;
-    };
-
-    // ── Helper: Build matched medicine object ──
-    const buildMedicineObj = (name, dbMatch, freq, duration) => {
-      const daily = freq.m + freq.a + freq.n;
-      const qty = daily * duration;
-      // Use newMrp from schema (price virtual also works)
-      const price = dbMatch ? (dbMatch.newMrp || dbMatch.price || 0) : 0;
-      // Schema uses 'qty' field for stock quantity
-      const stock = dbMatch?.qty ?? 0;
-      return {
-        medicineId: dbMatch?._id || null,
-        name: dbMatch?.description || name,
-        description: dbMatch?.description || name,
-        mfr: dbMatch?.mfr || "",
-        pack: dbMatch?.pack || "",
-        batchNo: dbMatch?.batchNo || "",
-        hsnCode: dbMatch?.hsnCode || "",
-        gstPercent: dbMatch?.gstPercent || 5,
-        dosage: "",
-        freq,
-        freqLabel: `${freq.m}-${freq.a}-${freq.n}`,
-        duration,
-        qty,
-        price,
-        subtotal: qty * price,
-        stock,
-        inStock: stock >= qty,
-      };
-    };
-
-    // ── EXCEL & CSV EXTRACTION ──
-    if (mimetype.includes("spreadsheet") || mimetype.includes("excel") || mimetype.includes("csv") || filePath.endsWith(".csv")) {
-      fileType = mimetype.includes("csv") || filePath.endsWith(".csv") ? "csv" : "excel";
-      console.log(`📊 Processing as ${fileType.toUpperCase()} file`);
-      try {
-        let rows = [];
-        if (mimetype.includes("csv") || filePath.endsWith(".csv")) {
-          // Parse CSV file
-          const csvText = fs.readFileSync(filePath, "utf-8");
-          const lines = csvText.trim().split("\n");
-          rows = lines.map(line => line.split(",").map(cell => cell.trim()));
-        } else {
-          // Parse Excel file
-          const wb = XLSX.readFile(filePath);
-          const ws = wb.Sheets[wb.SheetNames[0]];
-          rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
-        }
-
-        // Find medicine name column (auto-detect header)
-        const headers = (rows[0] || []).map(h => String(h || "").toLowerCase().trim());
-        const medColIdx = headers.findIndex(h =>
-          h.includes("medicine") || h.includes("drug") || h.includes("name") || h.includes("tablet")
-        );
-        const col = medColIdx >= 0 ? medColIdx : 0;
-        const startRow = medColIdx >= 0 ? 1 : 0;
-
-        // Extract medicine names
-        const medNames = rows.slice(startRow)
-          .map(r => String(r[col] || "").trim())
-          .filter(n => n.length >= 3 && /[a-zA-Z]/.test(n));
-
-        // Match medicines (default: 1-0-1 frequency, 5 day duration)
-        const addedNames = new Set();
-        for (const medName of medNames) {
-          const dbMatch = findDBMatch(medName);
-          const medDescKey = (dbMatch?.description || dbMatch?.name || "").toLowerCase();
-          if (!dbMatch || addedNames.has(medDescKey)) continue;
-
-          addedNames.add(medDescKey);
-          matchedMeds.push(buildMedicineObj(medName, dbMatch, { m: 1, a: 0, n: 1 }, 5));
-        }
-      } catch (err) {
-        console.error("Excel extraction error:", err.message);
-        // Fall through to error handling
-      }
-    }
-    // ── PDF EXTRACTION ──
-    else if (mimetype.includes("pdf")) {
-      fileType = "pdf";
-      console.log("📄 Processing as PDF file");
-      let parsed = { medicines: [], doctor: null };
-      let text = "";
-
-      try {
-        text = await extractTextFromPDF(filePath);
-        console.log(`📄 Extracted text length: ${text?.length || 0} characters`);
-        if (text && text.length > 20) {
-          console.log(`📄 Text sample (first 200 chars): ${text.substring(0, 200)}`);
-        }
-        parsed = parsePrescriptionText(text);
-        console.log(`📄 Parsed medicines: ${parsed.medicines?.length || 0}, doctor: ${parsed.doctor || "not found"}`);
-        doctor = parsed.doctor || doctor;
-      } catch (pdfErr) {
-        console.error("❌ PDF extraction failed:", pdfErr.message);
-        // Continue with empty medicines
-      }
-
-      const addedNames = new Set();
-      console.log(`\n🔍 PDF: Processing ${parsed.medicines.length} parsed medicines...`);
-      for (const parsedMed of parsed.medicines) {
-        console.log(`   📋 Parsed medicine: "${parsedMed.name}" ${parsedMed.dosage || ""} ${parsedMed.freqLabel} ${parsedMed.duration}d qty:${parsedMed.qty}`);
-        const dbMatch = findDBMatch(parsedMed.name);
-        const medDescKey = (dbMatch?.description || dbMatch?.name || parsedMed.name).toLowerCase();
-        if (addedNames.has(medDescKey)) {
-          console.log(`   ⏭️  Already added, skipping`);
-          continue;
-        }
-
-        addedNames.add(medDescKey);
-        matchedMeds.push(buildMedicineObj(parsedMed.name, dbMatch, parsedMed.freq || { m: 1, a: 0, n: 1 }, parsedMed.duration || 5));
-        console.log(`   ✅ Added to matchedMeds${dbMatch ? ` (DB ID: ${dbMatch._id})` : " (no DB match)"}`);
-      }
-
-      // Fallback: scan full text for more medicines
-      if (matchedMeds.length === 0 && text) {
-        for (const med of dbMedicines) {
-          const baseName = (med.description || "").toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").trim();
-          const medDescKey = (med.description || "").toLowerCase();
-          if (baseName.length >= 4 && text.includes(baseName) && !addedNames.has(medDescKey)) {
-            addedNames.add(medDescKey);
-            matchedMeds.push(buildMedicineObj(med.description, med, { m: 1, a: 0, n: 1 }, 5));
-          }
-        }
-      }
-    }
-    // ── IMAGE EXTRACTION ──
-    else if (mimetype.startsWith("image/")) {
-      fileType = "image";
-      console.log("📷 Processing as IMAGE file");
-      let parsed = { medicines: [], doctor: null };
-      let text = "";
-
-      try {
-        text = await extractTextFromImage(filePath);
-        console.log(`📷 Extracted text length: ${text?.length || 0} characters`);
-        if (text && text.length > 20) {
-          console.log(`📷 Text sample (first 200 chars): ${text.substring(0, 200)}`);
-        }
-        parsed = parsePrescriptionText(text);
-        console.log(`📷 Parsed medicines: ${parsed.medicines?.length || 0}, doctor: ${parsed.doctor || "not found"}`);
-        doctor = parsed.doctor || doctor;
-      } catch (imgErr) {
-        console.error("❌ Image extraction failed:", imgErr.message);
-        // Continue with empty medicines
-      }
-
-      const addedNames = new Set();
-      console.log(`\n🔍 IMAGE: Processing ${parsed.medicines.length} parsed medicines...`);
-      for (const parsedMed of parsed.medicines) {
-        console.log(`   📋 Parsed medicine: "${parsedMed.name}" ${parsedMed.dosage || ""} ${parsedMed.freqLabel} ${parsedMed.duration}d qty:${parsedMed.qty}`);
-        const dbMatch = findDBMatch(parsedMed.name);
-        const medDescKey = (dbMatch?.description || dbMatch?.name || parsedMed.name).toLowerCase();
-        if (addedNames.has(medDescKey)) {
-          console.log(`   ⏭️  Already added, skipping`);
-          continue;
-        }
-
-        addedNames.add(medDescKey);
-        matchedMeds.push(buildMedicineObj(parsedMed.name, dbMatch, parsedMed.freq || { m: 1, a: 0, n: 1 }, parsedMed.duration || 5));
-        console.log(`   ✅ Added to matchedMeds${dbMatch ? ` (DB ID: ${dbMatch._id})` : " (no DB match)"}`);
-      }
-
-      // Fallback: scan full text
-      if (matchedMeds.length === 0 && text) {
-        for (const med of dbMedicines) {
-          const baseName = (med.description || "").toLowerCase().replace(/\s*\d+\s*mg|\s*\d+\s*ml/g, "").trim();
-          const medDescKey = (med.description || "").toLowerCase();
-          if (baseName.length >= 4 && text.includes(baseName) && !addedNames.has(medDescKey)) {
-            addedNames.add(medDescKey);
-            matchedMeds.push(buildMedicineObj(med.description, med, { m: 1, a: 0, n: 1 }, 5));
-          }
-        }
-      }
-    } else {
-      console.warn(`⚠️  Unrecognized file type: ${mimetype}`);
-      console.log("Supported types: spreadsheet/excel, pdf, image/*");
-    }
-
-    // Only keep medicines that matched the database
-    const validMeds = matchedMeds.filter(m => m.medicineId);
-    const unmatchedMeds = matchedMeds.filter(m => !m.medicineId);
-
-    console.log(`\n📊 EXTRACTION SUMMARY:`);
-    console.log(`   Total extracted from file: ${matchedMeds.length}`);
-    console.log(`   ✅ Matched to inventory: ${validMeds.length}`);
-    console.log(`   ❌ Not in inventory: ${unmatchedMeds.length}`);
-
-    if (unmatchedMeds.length > 0) {
-      console.log(`\n   Unmatched medicines (ADD THESE TO INVENTORY):`);
-      unmatchedMeds.forEach((m, i) => {
-        console.log(`      ${i+1}. "${m.name}" ${m.dosage || ""}`);
+      return res.status(400).json({
+        success: false,
+        message: "No file uploaded",
       });
     }
 
-    console.log(`\n   ✅ Matched medicines ready for order:`);
-    validMeds.forEach((m, i) => {
-      console.log(`      ${i+1}. "${m.name}" - ${m.freqLabel} - ${m.duration}d - qty:${m.qty}`);
+    const { mimetype, path: filePath } = req.file;
+    console.log(
+      `\n📥 Processing file: ${req.file.originalname} (${mimetype})`
+    );
+
+    // Load all active medicines from database
+    const dbMedicines = await Medicine.find({ status: "Active" }).lean();
+    console.log(`📚 Loaded ${dbMedicines.length} medicines from database`);
+
+    let extractedMedicines = [];
+    let extractedText = "";
+    let extractedDoctor = null;
+    let fileType = "unknown";
+
+    // ══════════════════════════════════════════════════════════════
+    // PROCESS BASED ON FILE TYPE
+    // ══════════════════════════════════════════════════════════════
+
+    if (mimetype.includes("pdf")) {
+      fileType = "pdf";
+      console.log("📄 Processing PDF file...");
+      try {
+        extractedText = await extractTextFromPDF(filePath);
+        console.log(
+          `   ✓ Extracted ${extractedText?.length || 0} characters from PDF`
+        );
+      } catch (err) {
+        console.error("   ✗ PDF extraction failed:", err.message);
+      }
+    } else if (mimetype.startsWith("image/")) {
+      fileType = "image";
+      console.log("📷 Processing image file...");
+      try {
+        extractedText = await extractTextFromImage(filePath);
+        console.log(
+          `   ✓ Extracted ${extractedText?.length || 0} characters from image`
+        );
+      } catch (err) {
+        console.error("   ✗ Image extraction failed:", err.message);
+      }
+    } else if (
+      mimetype.includes("spreadsheet") ||
+      mimetype.includes("excel") ||
+      mimetype.includes("csv")
+    ) {
+      fileType = "excel";
+      console.log("📊 Processing Excel/CSV file...");
+      try {
+        const wb = XLSX.readFile(filePath);
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
+
+        // Extract medicine names from rows
+        for (let i = 1; i < rows.length; i++) {
+          const row = rows[i];
+          if (!row || row.length === 0) continue;
+
+          // Get first column as medicine name
+          const medName = String(row[0] || "").trim();
+          if (medName.length >= 2) {
+            extractedMedicines.push({
+              name: medName,
+              frequency: "1-0-1",
+              duration: 5,
+            });
+          }
+        }
+        console.log(`   ✓ Extracted ${extractedMedicines.length} medicines`);
+      } catch (err) {
+        console.error("   ✗ Excel extraction failed:", err.message);
+      }
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // EXTRACT MEDICINES FROM TEXT
+    // ══════════════════════════════════════════════════════════════
+    if (extractedText && extractedMedicines.length === 0) {
+      console.log("🔍 Extracting medicine names from text...");
+
+      // Use parsePrescriptionText to extract structured data
+      const parsed = parsePrescriptionText(extractedText);
+      if (parsed && parsed.medicines && parsed.medicines.length > 0) {
+        extractedMedicines = parsed.medicines;
+        extractedDoctor = parsed.doctor || null;
+        console.log(`   ✓ Extracted ${extractedMedicines.length} medicines`);
+        if (extractedDoctor) console.log(`   ✓ Doctor: ${extractedDoctor}`);
+      } else {
+        // Fallback: Extract lines that look like medicine names
+        const lines = extractedText.split("\n");
+        for (const line of lines) {
+          const cleaned = line
+            .replace(/^[-•*]\s*/, "") // Remove bullets
+            .replace(/^\d+[.)]\s*/, "") // Remove numbering
+            .trim();
+
+          if (cleaned.length >= 3 && cleaned.length < 100) {
+            // Basic medicine name validation
+            const hasLetters = /[a-zA-Z]/.test(cleaned);
+            const notHeader = !/doctor|patient|date|signature|clinic/i.test(
+              cleaned
+            );
+
+            if (hasLetters && notHeader) {
+              extractedMedicines.push({
+                name: cleaned,
+                frequency: "1-0-1",
+                duration: 5,
+              });
+            }
+          }
+        }
+        console.log(`   ✓ Extracted ${extractedMedicines.length} lines`);
+      }
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // MATCH EXTRACTED MEDICINES WITH DATABASE
+    // ══════════════════════════════════════════════════════════════
+    console.log("\n🔗 Matching medicines with database...");
+
+    const matchedMedicines = [];
+    const unmatchedMedicines = [];
+
+    const seenMedicines = new Set();
+
+    for (const med of extractedMedicines) {
+      const dbMatch = matchMedicineToDatabase(med.name, dbMedicines);
+
+      if (dbMatch) {
+        const medKey = dbMatch._id.toString();
+        if (seenMedicines.has(medKey)) {
+          console.log(`     (Already added, skipping duplicate)`);
+          continue;
+        }
+        seenMedicines.add(medKey);
+
+        // Parse frequency to calculate daily doses
+        let dailyDoses = 2;
+        if (med.frequency) {
+          const parts = med.frequency.split("-").map((p) => parseInt(p) || 0);
+          dailyDoses = parts.reduce((a, b) => a + b, 0);
+          if (dailyDoses === 0) dailyDoses = 2;
+        }
+
+        const duration = med.duration || 5;
+        const qty = dailyDoses * duration;
+
+        matchedMedicines.push({
+          medicineId: dbMatch._id.toString(),
+          name: dbMatch.description,
+          description: dbMatch.description,
+          mfr: dbMatch.mfr || "",
+          price: dbMatch.newMrp || 0,
+          stock: dbMatch.qty || 0,
+          frequency: med.frequency || "1-0-1",
+          duration,
+          qty,
+        });
+      } else {
+        unmatchedMedicines.push({
+          name: med.name,
+        });
+      }
+    }
+
+    console.log(
+      `\n📊 Results: ${matchedMedicines.length} matched, ${unmatchedMedicines.length} unmatched`
+    );
+
+    // Clean up uploaded file
+    try {
+      fs.unlinkSync(filePath);
+    } catch (err) {
+      console.warn("Warning: Could not delete uploaded file");
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // RETURN RESPONSE
+    // ══════════════════════════════════════════════════════════════
+    const baseResponse = {
+      success: true,
+      fileType,
+      matchedCount: matchedMedicines.length,
+      unmatchedCount: unmatchedMedicines.length,
+      doctor: extractedDoctor || "To be verified",
+      medicines: matchedMedicines,
+      unmatchedMedicines,
+    };
+
+    if (matchedMedicines.length > 0) {
+      baseResponse.message = `✓ Found ${matchedMedicines.length} matching medicine(s) in your inventory`;
+      res.json(baseResponse);
+    } else {
+      baseResponse.message =
+        "No matching medicines found in your inventory database. Please check the prescription or add these medicines to your inventory.";
+      res.json(baseResponse);
+    }
+  } catch (error) {
+    console.error("\n❌ EXTRACTION ERROR:", error);
+    try {
+      fs.unlinkSync(req.file?.path);
+    } catch {}
+    res.status(500).json({
+      success: false,
+      message: "Error processing prescription file",
+      error: error.message,
+    });
+  }
+};
+
+/* ════════════════════════════════════════════════════════════════
+   SAVE PRESCRIPTION (After extraction and review)
+   ════════════════════════════════════════════════════════════════ */
+exports.savePrescription = async (req, res) => {
+  try {
+    const { medicines, doctor, patientId } = req.body;
+
+    if (!medicines || medicines.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No medicines provided",
+      });
+    }
+
+    // Save prescription
+    const prescription = new Prescription({
+      doctor: doctor || "Unknown Doctor",
+      patientId,
+      date: new Date(),
+      meds: medicines.map((m) => ({
+        medicine: m.medicineId,
+        freq: m.frequency || { m: 1, a: 0, n: 1 },
+        duration: m.duration || 5,
+        qty: m.qty || 1,
+      })),
     });
 
-    const subtotal = validMeds.reduce((sum, m) => sum + m.subtotal, 0);
-    const gst = Math.round(subtotal * 0.05 * 100) / 100;
-    const total = subtotal + gst;
-
-    // Store file information for prescription
-    const fileInfo = {
-      filePath: req.file.path,
-      originalName: req.file.originalname,
-      mimetype: req.file.mimetype,
-      size: req.file.size,
-      uploadedAt: new Date()
-    };
+    await prescription.save();
 
     res.json({
       success: true,
-      fileType,
-      message: validMeds.length > 0
-        ? `✅ Found ${validMeds.length} medicine(s) matching your inventory`
-        : matchedMeds.length > 0
-        ? `⚠️ Extracted ${matchedMeds.length} medicine(s) from prescription, but none matched your inventory database. Please add these medicines to inventory with Status: Active.`
-        : "❌ No medicines could be extracted from the prescription file. Please check file quality or ensure it's in supported format (PDF, Image, Excel).",
-      extractedCount: matchedMeds.length,
-      matchedCount: validMeds.length,
-      unmatchedMedicines: matchedMeds
-        .filter(m => !m.medicineId)
-        .map(m => ({ name: m.name, dosage: m.dosage || "" })),
-      prescription: {
-        rxId: `RX-${Date.now()}`,
-        doctor,
-        date: new Date().toISOString(),
-        medsCount: validMeds.length,
-        medicines: validMeds,
-        subtotal,
-        gst,
-        total,
-        fileInfo, // Include file info for storage
-      },
+      message: "Prescription saved successfully",
+      prescription,
     });
   } catch (error) {
-    console.error("MEDICINE EXTRACTION ERROR:", error);
-    try { fs.unlinkSync(req.file?.path); } catch {}
-    res.status(500).json({ success: false, message: "Error processing file", error: error.message });
+    console.error("Save prescription error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error saving prescription",
+      error: error.message,
+    });
   }
 };
