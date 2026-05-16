@@ -415,23 +415,35 @@ exports.extractMedicines = async (req, res) => {
     // ══════════════════════════════════════════════════════════════
     // MATCH EXTRACTED MEDICINES WITH DATABASE
     // ══════════════════════════════════════════════════════════════
-    console.log("\n🔗 Matching medicines with database...");
+    console.log("\n" + "═".repeat(80));
+    console.log("🔗 MATCHING EXTRACTED MEDICINES WITH DATABASE");
+    console.log("═".repeat(80));
 
     const matchedMedicines = [];
     const unmatchedMedicines = [];
 
     const seenMedicines = new Set();
 
-    for (const med of extractedMedicines) {
+    console.log(`\n📊 Processing ${extractedMedicines.length} extracted medicines:\n`);
+
+    for (let idx = 0; idx < extractedMedicines.length; idx++) {
+      const med = extractedMedicines[idx];
+      console.log(`[${idx + 1}] EXTRACTED: "${med.name}"`);
       const dbMatch = matchMedicineToDatabase(med.name, dbMedicines);
 
       if (dbMatch) {
         const medKey = dbMatch._id.toString();
         if (seenMedicines.has(medKey)) {
-          console.log(`     (Already added, skipping duplicate)`);
+          console.log(`     ⚠️  Already added (duplicate), skipping\n`);
           continue;
         }
         seenMedicines.add(medKey);
+
+        console.log(`     ✅ MATCHED: "${dbMatch.description}"`);
+        console.log(`        ID: ${dbMatch._id}`);
+        console.log(`        Mfr: ${dbMatch.mfr || "Unknown"}`);
+        console.log(`        Price: ₹${dbMatch.newMrp || 0}`);
+        console.log(`        Stock: ${dbMatch.qty || 0} units\n`);
 
         // Parse frequency to calculate daily doses
         let dailyDoses = 2;
@@ -456,6 +468,7 @@ exports.extractMedicines = async (req, res) => {
           qty,
         });
       } else {
+        console.log(`     ❌ NO MATCH FOUND\n`);
         unmatchedMedicines.push({
           name: med.name,
         });

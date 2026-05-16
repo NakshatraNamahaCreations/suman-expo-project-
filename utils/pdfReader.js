@@ -28,7 +28,15 @@ const extractTextFromPDF = async (filePath) => {
     const text = (pdfData.text || "").trim();
 
     console.log(`✓ Pages: ${pdfData.numpages}, Text: ${text.length} chars`);
-    console.log("═".repeat(80));
+
+    // Print the full extracted text
+    console.log("\n" + "─".repeat(80));
+    console.log("📋 FULL EXTRACTED PDF TEXT:");
+    console.log("─".repeat(80));
+    console.log(text);
+    console.log("─".repeat(80));
+
+    console.log("\n═".repeat(80));
 
     return text;
 
