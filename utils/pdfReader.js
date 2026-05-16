@@ -48,19 +48,24 @@ const extractTextFromPDF = async (filePath) => {
     throw new Error("Empty or insufficient PDF text");
 
   } catch (err) {
-    console.log(`\n❌ PDF PARSE ERROR: ${err.message}`);
+    console.log(`\n❌ PDF PARSE ERROR`);
+    console.log(`   Error: ${err.message}`);
+    console.log(`   Stack: ${err.stack?.substring(0, 500)}`);
 
     // 🔥 FALLBACK TO OCR
     console.log("\n🔥 FALLBACK: Attempting OCR extraction...");
     try {
+      console.log("   Calling extractTextFromImage...");
       const ocrText = await extractTextFromImage(filePath);
 
-      if (!ocrText || ocrText.length === 0) {
-        console.log(`⚠️  OCR returned empty text`);
-        throw new Error("OCR extraction returned no text");
+      console.log(`   OCR returned: ${ocrText?.length || 0} characters`);
+
+      if (!ocrText || ocrText.trim().length === 0) {
+        console.log(`   ⚠️  OCR returned empty or whitespace-only text`);
+        throw new Error("OCR extraction returned no valid text");
       }
 
-      console.log(`✅ OCR EXTRACTION SUCCESS: ${ocrText.length} characters`);
+      console.log(`   ✅ OCR EXTRACTION SUCCESS: ${ocrText.length} characters`);
       console.log("\n📋 OCR EXTRACTED TEXT (first 1000 chars):");
       console.log("-".repeat(80));
       console.log(ocrText.substring(0, 1000));
@@ -68,9 +73,11 @@ const extractTextFromPDF = async (filePath) => {
       console.log("═".repeat(80));
       return ocrText;
     } catch (ocrErr) {
-      console.log(`\n❌ OCR EXTRACTION ALSO FAILED: ${ocrErr.message}`);
+      console.log(`\n❌ OCR EXTRACTION ALSO FAILED`);
+      console.log(`   Error: ${ocrErr.message}`);
+      console.log(`   Stack: ${ocrErr.stack?.substring(0, 500)}`);
       console.log("═".repeat(80));
-      throw new Error(`PDF and OCR extraction failed`);
+      throw ocrErr;
     }
   }
 };

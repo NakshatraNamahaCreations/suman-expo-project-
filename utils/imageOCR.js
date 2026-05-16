@@ -61,54 +61,72 @@ async function runOCREngine(base64Data, mimeType, engine) {
  * Tries BOTH OCR engines and picks the one with better medicine-related content.
  */
 async function extractTextFromImage(filePath) {
-  console.log("📷 Starting image extraction:", { filePath, fileExists: fs.existsSync(filePath) });
+  console.log("\n" + "═".repeat(80));
+  console.log("📷 IMAGE/PDF OCR EXTRACTION");
+  console.log("═".repeat(80));
+  console.log(`File Path: ${filePath}`);
+  console.log(`File Exists: ${fs.existsSync(filePath)}`);
 
   // Ensure proper extension
   let targetPath = filePath;
   const ext = path.extname(filePath).toLowerCase();
-  if (!ext || ![".jpg", ".jpeg", ".png", ".bmp", ".webp"].includes(ext)) {
-    console.log("⚠️  Invalid or missing extension, copying as .jpg:", ext);
+  if (!ext || ![".jpg", ".jpeg", ".png", ".bmp", ".webp", ".pdf"].includes(ext)) {
+    console.log(`\n⚠️  Invalid or missing extension: "${ext}"`);
+    console.log(`   Creating copy with .jpg extension...`);
     targetPath = filePath + ".jpg";
     try {
       fs.copyFileSync(filePath, targetPath);
-      console.log("✅ File copied to:", targetPath);
+      console.log(`   ✅ File copied to: ${targetPath}`);
     } catch (copyErr) {
-      console.error("❌ Failed to copy file:", copyErr.message);
+      console.error(`   ❌ Failed to copy file: ${copyErr.message}`);
+      console.log(`   Attempting Tesseract fallback...`);
       return fallbackTesseract(filePath, filePath);
     }
   }
 
   if (!OCR_API_KEY) {
-    console.log("⚠️  No OCR_API_KEY, falling back to Tesseract");
+    console.log(`\n⚠️  OCR_API_KEY NOT SET in environment`);
+    console.log(`   Falling back to Tesseract.js...`);
     return fallbackTesseract(targetPath, filePath);
   }
 
-  console.log("✅ OCR_API_KEY is set, proceeding with OCR.space API");
+  console.log(`\n✅ OCR_API_KEY is SET, using OCR.space API`);
 
   let imageData, base64;
   try {
+    console.log(`   Reading file...`);
     imageData = fs.readFileSync(targetPath);
-    console.log(`📷 File read successfully, size: ${imageData.length} bytes`);
+    console.log(`   ✅ File read: ${imageData.length} bytes`);
+
+    console.log(`   Encoding to base64...`);
     base64 = imageData.toString("base64");
-    console.log(`📷 Base64 encoded, length: ${base64.length} characters`);
+    console.log(`   ✅ Base64 encoded: ${base64.length} characters`);
   } catch (readErr) {
-    console.error("❌ Failed to read file:", readErr.message);
+    console.error(`   ❌ Failed to read file: ${readErr.message}`);
     if (targetPath !== filePath) try { fs.unlinkSync(targetPath); } catch {}
+    console.log(`   Trying Tesseract fallback...`);
     return fallbackTesseract(targetPath, filePath);
   }
 
   const mimeType = targetPath.endsWith(".png") ? "image/png" : "image/jpeg";
+  console.log(`   MIME Type: ${mimeType}`);
 
   try {
     // Run BOTH engines in parallel
-    console.log("Running OCR Engine 1 & 2 in parallel...");
+    console.log(`\n   Running OCR.space Engines 1 & 2 in parallel...`);
     const [text1, text2] = await Promise.all([
-      runOCREngine(base64, mimeType, 1).catch(() => ""),
-      runOCREngine(base64, mimeType, 2).catch(() => ""),
+      runOCREngine(base64, mimeType, 1).catch((err) => {
+        console.error(`   Engine 1 error: ${err.message}`);
+        return "";
+      }),
+      runOCREngine(base64, mimeType, 2).catch((err) => {
+        console.error(`   Engine 2 error: ${err.message}`);
+        return "";
+      }),
     ]);
 
-    console.log("=== Engine 1 ===", text1.substring(0, 300));
-    console.log("=== Engine 2 ===", text2.substring(0, 300));
+    console.log(`\n   Engine 1 result: ${text1.length} characters`);
+    console.log(`   Engine 2 result: ${text2.length} characters`);
 
     // Score each result — prefer the one with more medicine-related keywords
     const score = (text) => {
@@ -144,33 +162,61 @@ async function extractTextFromImage(filePath) {
     const bestText = s1 >= s2 ? text1 : text2;
     const bestEngine = s1 >= s2 ? 1 : 2;
 
-    console.log(`Engine scores: E1=${s1}, E2=${s2}. Using Engine ${bestEngine}`);
-    console.log("=== BEST OCR TEXT (first 500 chars) ===");
-    console.log(bestText.substring(0, 500));
-    if (bestText.length > 500) console.log("... (truncated)");
-    console.log("====================================");
+    console.log(`\n   Scoring results:`);
+    console.log(`   Engine 1 score: ${s1}`);
+    console.log(`   Engine 2 score: ${s2}`);
+    console.log(`   Using Engine: ${bestEngine}`);
+
+    if (bestText && bestText.length > 0) {
+      console.log(`\n   ✅ OCR.space SUCCESS: ${bestText.length} characters`);
+      console.log("\n   📋 EXTRACTED TEXT (first 500 chars):");
+      console.log("   " + "-".repeat(76));
+      console.log("   " + bestText.substring(0, 500).split('\n').join('\n   '));
+      console.log("   " + "-".repeat(76));
+      console.log("═".repeat(80));
+    } else {
+      console.log(`\n   ⚠️  OCR.space returned no text`);
+      console.log(`   Trying Tesseract fallback...`);
+      if (targetPath !== filePath) try { fs.unlinkSync(targetPath); } catch {}
+      return fallbackTesseract(targetPath, filePath);
+    }
 
     if (targetPath !== filePath) try { fs.unlinkSync(targetPath); } catch {}
-
     return bestText.toLowerCase();
+
   } catch (err) {
-    console.error("OCR.space failed:", err.message);
+    console.error(`\n   ❌ OCR.space EXCEPTION: ${err.message}`);
+    console.error(`      Stack: ${err.stack?.substring(0, 300)}`);
+    console.log(`   Trying Tesseract fallback...`);
     return fallbackTesseract(targetPath, filePath);
   }
 }
 
 async function fallbackTesseract(targetPath, filePath) {
-  console.log(`🟡 Falling back to Tesseract for: ${targetPath}`);
+  console.log(`\n🟡 TESSERACT FALLBACK`);
+  console.log(`   File Path: ${targetPath}`);
+  console.log(`   File Exists: ${fs.existsSync(targetPath)}`);
+
   try {
+    console.log(`   Loading tesseract.js...`);
     const Tesseract = require("tesseract.js");
-    console.log("🟡 Tesseract.js loaded, starting recognition...");
+    console.log(`   ✅ Tesseract.js loaded`);
+
+    console.log(`   Starting OCR recognition...`);
     const { data } = await Tesseract.recognize(targetPath, "eng");
     const text = (data.text || "").toLowerCase();
-    console.log(`✅ Tesseract extracted ${text.length} characters`);
+
+    console.log(`   ✅ Tesseract extraction success: ${text.length} characters`);
+    console.log("═".repeat(80));
+
     if (targetPath !== filePath) try { fs.unlinkSync(targetPath); } catch {}
     return text;
   } catch (err) {
-    console.error(`❌ Tesseract failed: ${err.message}`);
+    console.error(`\n   ❌ TESSERACT EXTRACTION FAILED`);
+    console.error(`      Error: ${err.message}`);
+    console.error(`      Stack: ${err.stack?.substring(0, 300)}`);
+    console.log("═".repeat(80));
+
     if (targetPath !== filePath) try { fs.unlinkSync(targetPath); } catch {}
     return "";
   }
