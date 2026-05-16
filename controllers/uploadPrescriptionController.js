@@ -288,21 +288,28 @@ function matchMedicineToDatabase(medicineName, dbMedicines) {
    ════════════════════════════════════════════════════════════════ */
 exports.extractMedicines = async (req, res) => {
   try {
+    console.log("\n" + "═".repeat(80));
+    console.log("📥 EXTRACT MEDICINES API CALLED");
+    console.log("═".repeat(80));
+
     if (!req.file) {
+      console.log("❌ No file in request");
       return res.status(400).json({
         success: false,
         message: "No file uploaded",
       });
     }
 
-    const { mimetype, path: filePath } = req.file;
-    console.log(
-      `\n📥 Processing file: ${req.file.originalname} (${mimetype})`
-    );
+    const { mimetype, path: filePath, originalname } = req.file;
+    console.log(`File Name: ${originalname}`);
+    console.log(`File Path: ${filePath}`);
+    console.log(`MIME Type: ${mimetype}`);
+    console.log(`File Exists: ${fs.existsSync(filePath)}`);
 
     // Load ALL medicines from database (regardless of status)
+    console.log("\n📚 Loading medicines from database...");
     const dbMedicines = await Medicine.find({}).lean();
-    console.log(`📚 Loaded ${dbMedicines.length} medicines from database (all statuses)`);
+    console.log(`✅ Loaded ${dbMedicines.length} medicines`);
 
     let extractedMedicines = [];
     let extractedText = "";
@@ -313,25 +320,24 @@ exports.extractMedicines = async (req, res) => {
     // PROCESS BASED ON FILE TYPE
     // ══════════════════════════════════════════════════════════════
 
+    console.log("\n🔍 Determining file type and extraction method...");
+
     if (mimetype.includes("pdf")) {
       fileType = "pdf";
-      console.log("📄 Processing PDF file...");
+      console.log("📄 FILE TYPE: PDF");
+      console.log("📄 Attempting PDF extraction...");
       try {
-        console.log(`   📄 PDF Path: ${filePath}`);
-        console.log(`   📄 File exists check: ${fs.existsSync(filePath)}`);
+        console.log(`   Calling extractTextFromPDF...`);
         extractedText = await extractTextFromPDF(filePath);
-        if (!extractedText || extractedText.trim().length === 0) {
-          console.warn(`   ⚠️  PDF extraction returned empty text`);
-        } else {
-          console.log(
-            `   ✓ Extracted ${extractedText.length} characters from PDF`
-          );
+        console.log(`   ✅ Extraction completed. Text length: ${extractedText?.length || 0}`);
+        if (extractedText && extractedText.length > 0) {
+          console.log(`   First 200 chars: ${extractedText.substring(0, 200)}`);
         }
       } catch (err) {
-        console.error("   ✗ PDF extraction failed");
-        console.error("      Error:", err.message);
-        console.error("      Stack:", err.stack?.substring(0, 300));
-        throw err; // Re-throw to be handled by outer catch
+        console.error(`   ❌ Extraction error: ${err.message}`);
+        console.error(`   Stack: ${err.stack?.substring(0, 200)}`);
+        // Don't re-throw - continue with what we have
+        extractedText = "";
       }
     } else if (mimetype.startsWith("image/")) {
       fileType = "image";
@@ -517,6 +523,10 @@ exports.extractMedicines = async (req, res) => {
     // ══════════════════════════════════════════════════════════════
     // RETURN RESPONSE
     // ══════════════════════════════════════════════════════════════
+    console.log("\n" + "═".repeat(80));
+    console.log("📤 SENDING RESPONSE TO CLIENT");
+    console.log("═".repeat(80));
+
     const baseResponse = {
       success: true,
       fileType,
@@ -527,21 +537,40 @@ exports.extractMedicines = async (req, res) => {
       unmatchedMedicines,
     };
 
-    if (matchedMedicines.length > 0) {
+    if (extractedMedicines.length === 0 && !extractedText) {
+      console.log("⚠️  No text extracted from file");
+      baseResponse.message = "No medicines could be extracted from the prescription. Please ensure the prescription is clear and contains medicine names.";
+    } else if (matchedMedicines.length > 0) {
       baseResponse.message = `✓ Found ${matchedMedicines.length} matching medicine(s) in your inventory`;
-      res.json(baseResponse);
     } else {
-      baseResponse.message =
-        extractedMedicines.length === 0
-          ? "No medicines could be extracted from the prescription. Please ensure the prescription is clear and contains medicine names."
-          : `No matching medicines found in your inventory database. ${unmatchedMedicines.length} medicine(s) not found: ${unmatchedMedicines.map(m => m.name).join(", ")}. Please check the prescription or add these medicines to your inventory.`;
-      res.json(baseResponse);
+      baseResponse.message = `No matching medicines found. Extracted ${extractedMedicines.length} names, but none matched the inventory.`;
     }
+
+    console.log(`✅ Response: ${baseResponse.matchedCount} matched, ${baseResponse.unmatchedCount} unmatched`);
+    console.log("═".repeat(80));
+
+    // Clean up uploaded file
+    try {
+      fs.unlinkSync(filePath);
+      console.log("✓ Uploaded file cleaned up");
+    } catch (err) {
+      console.warn("⚠️  Could not delete uploaded file");
+    }
+
+    res.json(baseResponse);
+
   } catch (error) {
-    console.error("\n❌ EXTRACTION ERROR:", error);
+    console.error("\n" + "═".repeat(80));
+    console.error("❌ EXTRACTION ERROR");
+    console.error("═".repeat(80));
+    console.error("Error:", error.message);
+    console.error("Stack:", error.stack?.substring(0, 300));
+    console.error("═".repeat(80));
+
     try {
       fs.unlinkSync(req.file?.path);
     } catch {}
+
     res.status(500).json({
       success: false,
       message: "Error processing prescription file",
