@@ -1,7 +1,6 @@
 const pdfParseLib = require("pdf-parse");
 const fs = require("fs");
 const Tesseract = require("tesseract.js");
-const pdfdiff = require("pdf-parse/lib/pdf.js/v2.5.207/build/pdf.js");
 
 const extractTextFromPDF = async (filePath) => {
   console.log("\n===== PDF TEXT EXTRACTION =====");
