@@ -10,119 +10,123 @@ const { extractTextFromImage, parsePrescriptionText } = require("../utils/imageO
    ════════════════════════════════════════════════════════════════ */
 function extractBrandAndStrengthMedicines(text) {
   if (!text || text.length < 10) {
-    console.log("   ⚠️  Text too short to parse");
+    console.log("⚠️  Text too short to parse");
     return [];
   }
 
-  console.log("\n🔍 EXTRACTING MEDICINES FROM BRAND & STRENGTH COLUMN");
-  console.log("=".repeat(70));
+  console.log("\n" + "=".repeat(80));
+  console.log("🔍 EXTRACTING MEDICINES FROM BRAND & STRENGTH COLUMN");
+  console.log("=".repeat(80));
 
   const medicines = [];
-  const lines = text.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+  const allLines = text.split("\n");
 
-  console.log(`📄 Total lines in text: ${lines.length}`);
+  console.log(`📄 Total lines in raw text: ${allLines.length}`);
 
-  // Find the start of the medicine table
-  let tableStartIdx = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const lower = lines[i].toLowerCase();
-    if ((lower.includes("brand") && lower.includes("strength"))) {
-      tableStartIdx = i;
-      console.log(`\n✓ Found "Brand & Strength" header at line ${i}:`);
-      console.log(`  "${lines[i]}"`);
+  // Find the "Brand & Strength" header line
+  let headerLineIdx = -1;
+  for (let i = 0; i < allLines.length; i++) {
+    const line = allLines[i];
+    if (line.toLowerCase().includes("brand") && line.toLowerCase().includes("strength")) {
+      headerLineIdx = i;
+      console.log(`\n✓ Found "Brand & Strength" header at line ${i}`);
+      console.log(`  Content: "${line}"`);
       break;
     }
   }
 
-  if (tableStartIdx === -1) {
-    console.log("\n❌ ERROR: Could not find 'Brand & Strength' header in text!");
-    console.log("First 10 lines:");
-    for (let i = 0; i < Math.min(10, lines.length); i++) {
-      console.log(`  Line ${i}: "${lines[i]}"`);
+  if (headerLineIdx === -1) {
+    console.log("\n❌ ERROR: 'Brand & Strength' header not found!");
+    console.log("Showing first 15 lines for debugging:");
+    for (let i = 0; i < Math.min(15, allLines.length); i++) {
+      console.log(`  Line ${i}: "${allLines[i].substring(0, 100)}"`);
     }
     return [];
   }
 
-  // Find where the table ends
-  let tableEndIdx = lines.length;
-  const endMarkers = ["investigation", "observation", "diagnosis", "impression"];
-  for (let i = tableStartIdx + 1; i < lines.length; i++) {
-    const lower = lines[i].toLowerCase();
-    if (endMarkers.some(marker => lower.includes(marker))) {
+  // Find where the medicine table ends (look for "Investigation", "Observation", etc.)
+  let tableEndIdx = allLines.length;
+  const endMarkers = ["investigation", "observation", "diagnosis", "note", "sign"];
+  for (let i = headerLineIdx + 1; i < allLines.length; i++) {
+    const lower = allLines[i].toLowerCase().trim();
+    if (lower.length > 5 && endMarkers.some(marker => lower.startsWith(marker))) {
       tableEndIdx = i;
-      console.log(`✓ Found table end at line ${i}: "${lines[i]}"`);
+      console.log(`✓ Found table end at line ${i}`);
       break;
     }
   }
 
-  // Extract table rows
-  const tableLines = lines.slice(tableStartIdx + 1, tableEndIdx);
-  console.log(`\n📋 Table section has ${tableLines.length} lines`);
-  console.log("-".repeat(70));
+  console.log(`\n📋 Processing lines ${headerLineIdx + 1} to ${tableEndIdx - 1}`);
+  console.log("-".repeat(80));
 
-  // Parse each row
-  for (let i = 0; i < tableLines.length; i++) {
-    const rawLine = tableLines[i];
+  // Process each line in the medicine table
+  for (let i = headerLineIdx + 1; i < tableEndIdx; i++) {
+    const rawLine = allLines[i];
 
-    // Skip empty or very short lines
-    if (rawLine.length < 4) {
+    // Skip empty lines
+    if (!rawLine || rawLine.trim().length < 3) {
       continue;
     }
 
-    console.log(`\n[Line ${i}] Raw: "${rawLine}"`);
+    console.log(`\n[Line ${i}] "${rawLine.substring(0, 100)}${rawLine.length > 100 ? '...' : ''}"`);
 
-    // Extract first column (before tab or multiple spaces)
-    let medName = rawLine;
+    // Extract the medicine name - it's the numbered item at the start
+    // Pattern: "1. TABLET NAME" or "1  TABLET NAME" or "1. TABLET NAME  (then other columns)"
 
-    // Check if line has tabs (common in OCR tables)
-    if (rawLine.includes("\t")) {
-      medName = rawLine.split("\t")[0].trim();
-      console.log(`  After tab split: "${medName}"`);
-    }
-    // Check if line has multiple spaces (indicating column separation)
-    else if (/\s{3,}/.test(rawLine)) {
-      medName = rawLine.split(/\s{3,}/)[0].trim();
-      console.log(`  After space split: "${medName}"`);
+    let medName = rawLine.trim();
+
+    // Remove leading number (1., 2., 1), 2), etc.)
+    const numberMatch = medName.match(/^[\(\[]?\d+[\.\)\]\s]+/);
+    if (numberMatch) {
+      medName = medName.substring(numberMatch[0].length).trim();
+      console.log(`  After removing number: "${medName}"`);
     }
 
-    // Remove leading numbering (1. 2. (1) (2) etc)
-    medName = medName.replace(/^[\(\[]?\d+[\.\)\]\s]+/, "").trim();
-    if (medName !== rawLine) {
-      console.log(`  After removing numbering: "${medName}"`);
+    // Now extract only the Brand & Strength part (before other columns)
+    // Columns are typically separated by 2+ spaces or tabs
+    const columnSeparator = medName.match(/\t+|\s{2,}/);
+    if (columnSeparator) {
+      medName = medName.substring(0, columnSeparator.index).trim();
+      console.log(`  After extracting first column: "${medName}"`);
     }
 
-    // Validation checks
+    // Clean up
+    medName = medName
+      .replace(/\s+/g, " ") // Normalize spaces
+      .replace(/[,;:\.\?\!]+$/, "") // Remove trailing punctuation
+      .trim();
+
+    // Validation
     if (medName.length < 4) {
-      console.log(`  ❌ Too short (${medName.length} chars)`);
+      console.log(`  ❌ SKIP: Too short (${medName.length} chars)`);
       continue;
     }
 
-    // Check if it contains only common non-medicine words
-    const badWords = ["after", "food", "before", "dose", "frequency", "instruction", "duration", "meal"];
-    const onlyBadWords = badWords.some(w => medName.toLowerCase() === w);
-    if (onlyBadWords) {
-      console.log(`  ❌ Only contains non-medicine word: "${medName}"`);
+    // Must have at least some letters
+    if (!/[a-zA-Z]/i.test(medName)) {
+      console.log(`  ❌ SKIP: No letters found`);
       continue;
     }
 
-    // Must start with letter and contain at least some alphabetic content
-    if (!/^[A-Z]/i.test(medName)) {
-      console.log(`  ❌ Doesn't start with letter`);
+    // Must not be just common metadata
+    const metadata = ["dose", "freq", "duration", "instruction", "food", "meal", "day", "days"];
+    if (metadata.includes(medName.toLowerCase())) {
+      console.log(`  ❌ SKIP: Metadata word`);
       continue;
     }
 
-    if (!/[A-Z]{2,}/i.test(medName)) {
-      console.log(`  ❌ Doesn't have enough letters`);
+    // Must look like a medicine (typically starts with uppercase, or contains TABLET/CREAM/etc)
+    const isMedicineLike = /^[A-Z]/i.test(medName) &&
+      (medName.match(/[a-zA-Z]{3,}/g) || []).length >= 1;
+
+    if (!isMedicineLike) {
+      console.log(`  ❌ SKIP: Doesn't look like a medicine`);
       continue;
     }
-
-    // Should look like a medicine - clean up
-    medName = medName.replace(/[,;:\.\?\!]+$/, "").trim();
-    medName = medName.replace(/\s+/g, " ");
 
     // Check for duplicates
     if (medicines.some(m => m.toLowerCase() === medName.toLowerCase())) {
-      console.log(`  ℹ️  Already have this medicine`);
+      console.log(`  ℹ️  SKIP: Duplicate`);
       continue;
     }
 
@@ -130,12 +134,16 @@ function extractBrandAndStrengthMedicines(text) {
     console.log(`  ✅ ADDED: "${medName}"`);
   }
 
-  console.log("\n" + "=".repeat(70));
-  console.log(`📊 TOTAL MEDICINES EXTRACTED: ${medicines.length}`);
-  for (let i = 0; i < medicines.length; i++) {
-    console.log(`   ${i + 1}. "${medicines[i]}"`);
+  console.log("\n" + "=".repeat(80));
+  console.log(`📊 MEDICINES EXTRACTED: ${medicines.length}`);
+  if (medicines.length > 0) {
+    medicines.forEach((med, idx) => {
+      console.log(`   ${idx + 1}. "${med}"`);
+    });
+  } else {
+    console.log("   (none found)");
   }
-  console.log("=".repeat(70));
+  console.log("=".repeat(80) + "\n");
 
   return medicines;
 }
@@ -255,9 +263,9 @@ exports.extractMedicines = async (req, res) => {
       `\n📥 Processing file: ${req.file.originalname} (${mimetype})`
     );
 
-    // Load all active medicines from database
-    const dbMedicines = await Medicine.find({ status: "Active" }).lean();
-    console.log(`📚 Loaded ${dbMedicines.length} medicines from database`);
+    // Load ALL medicines from database (regardless of status)
+    const dbMedicines = await Medicine.find({}).lean();
+    console.log(`📚 Loaded ${dbMedicines.length} medicines from database (all statuses)`);
 
     let extractedMedicines = [];
     let extractedText = "";
