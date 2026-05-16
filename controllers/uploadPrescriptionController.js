@@ -23,31 +23,31 @@ function extractBrandAndStrengthMedicines(text) {
 
   console.log(`📄 Total lines in raw text: ${allLines.length}`);
 
-  // Medicine prefix patterns
-  const medPrefixPattern = /^(tablet|capsule|syrup|injection|cream|gel|ointment|drops|suspension|spray|patch|liquid|powder)\s+/i;
+  // Medicine form types to remove
+  const formTypes = ["tablet", "capsule", "syrup", "injection", "cream", "gel", "ointment", "lotion", "powder", "drops", "spray", "suspension", "patch", "liquid", "solution", "inhaler", "cap", "tab", "inj"];
+  const medPrefixPattern = new RegExp(`^(${formTypes.join("|")})\\s+`, "i");
   const numberedPattern = /^\d+[\.\)]\s*/;
 
-  // Find the "Brand & Strength" header line (optional - some PDFs have it)
+  // Find the "Brand & Strength" header line
   let headerLineIdx = -1;
   for (let i = 0; i < allLines.length; i++) {
     const line = allLines[i];
     if (line.toLowerCase().includes("brand") && line.toLowerCase().includes("strength")) {
       headerLineIdx = i;
-      console.log(`\n✓ Found "Brand & Strength" header at line ${i}`);
+      console.log(`✓ Found "Brand & Strength" header at line ${i}`);
       break;
     }
   }
 
   if (headerLineIdx === -1) {
-    console.log("\n⚠️  'Brand & Strength' header not found - will extract medicines from any medicine-looking lines");
+    console.log("⚠️  'Brand & Strength' header not found - will extract from all lines");
   }
 
-  // Find where the medicine table ends (look for "Investigation", "Observation", etc.)
+  // Find where the medicine table ends
   let tableEndIdx = allLines.length;
-  const endMarkers = ["investigation", "observation", "diagnosis", "note", "sign", "advice", "instruction", "follow"];
+  const endMarkers = ["investigation", "observation", "diagnosis", "note", "advice", "instruction"];
 
   if (headerLineIdx !== -1) {
-    // If we found a table header, look for the end
     for (let i = headerLineIdx + 1; i < allLines.length; i++) {
       const lower = allLines[i].toLowerCase().trim();
       if (lower.length > 5 && endMarkers.some(marker => lower.includes(marker))) {
@@ -56,45 +56,40 @@ function extractBrandAndStrengthMedicines(text) {
         break;
       }
     }
-    console.log(`\n📋 Processing lines ${headerLineIdx + 1} to ${tableEndIdx - 1}`);
-  } else {
-    // If no header found, process all lines looking for medicine patterns
-    console.log(`\n📋 Scanning all ${allLines.length} lines for medicine patterns`);
+    console.log(`📋 Processing lines ${headerLineIdx + 1} to ${tableEndIdx - 1}`);
   }
 
   console.log("-".repeat(80));
 
-  // Determine which lines to process
   const linesToProcess = headerLineIdx !== -1
     ? allLines.slice(headerLineIdx + 1, tableEndIdx)
     : allLines;
 
-  // Process each line
   for (let i = 0; i < linesToProcess.length; i++) {
     const rawLine = linesToProcess[i];
 
-    // Skip empty lines
-    if (!rawLine || rawLine.trim().length < 3) {
-      continue;
-    }
+    if (!rawLine || rawLine.trim().length < 3) continue;
 
-    console.log(`\n[Line ${i}] "${rawLine.substring(0, 100)}${rawLine.length > 100 ? '...' : ''}"`);
+    console.log(`[Line ${i}] "${rawLine.substring(0, 80)}${rawLine.length > 80 ? "..." : ""}"`);
 
     let medName = rawLine.trim();
 
-    // Remove leading number (1., 2., 1), 2), etc.)
+    // Remove leading number (1., 2., etc.)
     medName = medName.replace(numberedPattern, "").trim();
 
-    // Now extract only the Brand & Strength part (before other columns)
-    // Columns are typically separated by 2+ spaces or tabs
-    const columnSeparator = medName.match(/\t+|\s{2,}/);
-    if (columnSeparator && columnSeparator.index > 0) {
-      medName = medName.substring(0, columnSeparator.index).trim();
-      console.log(`  After extracting first column: "${medName}"`);
+    // Extract only the first column (before tabs or 2+ spaces)
+    const columnMatch = medName.match(/^([^\t]{1,}?)[\t\s{2,}]/);
+    if (columnMatch) {
+      medName = columnMatch[1].trim();
+      console.log(`  → Column extracted: "${medName}"`);
     }
 
-    // Check if line starts with medicine form type (TABLET, CAPSULE, etc)
-    const hasMedicineForm = medPrefixPattern.test(medName);
+    // Remove form type prefix (TABLET, CAPSULE, CREAM, etc.)
+    const formMatch = medName.match(medPrefixPattern);
+    if (formMatch) {
+      medName = medName.substring(formMatch[0].length).trim();
+      console.log(`  → Form type removed: "${medName}"`);
+    }
 
     // Clean up
     medName = medName
@@ -102,184 +97,142 @@ function extractBrandAndStrengthMedicines(text) {
       .replace(/[,;:\.\?\!]+$/, "") // Remove trailing punctuation
       .trim();
 
-    // Skip if empty after cleaning
-    if (medName.length < 4) {
-      console.log(`  ❌ SKIP: Too short (${medName.length} chars)`);
+    // Validation checks
+    if (medName.length < 3) {
+      console.log(`  ❌ Too short`);
       continue;
     }
 
-    // Must have at least some letters
     if (!/[a-zA-Z]/i.test(medName)) {
-      console.log(`  ❌ SKIP: No letters found`);
+      console.log(`  ❌ No letters`);
       continue;
     }
 
-    // Must not be just common metadata
-    const metadata = ["dose", "freq", "frequency", "duration", "instruction", "instructions", "food", "meal", "day", "days", "hrs", "hours", "times", "morning", "afternoon", "evening", "night", "route"];
-    if (metadata.includes(medName.toLowerCase())) {
-      console.log(`  ❌ SKIP: Metadata word`);
+    // Skip metadata words
+    const metadata = ["dose", "freq", "frequency", "duration", "instruction", "food", "meal"];
+    if (metadata.some(m => medName.toLowerCase().includes(m))) {
+      console.log(`  ❌ Metadata`);
       continue;
     }
 
-    // If we found a medicine form (TABLET, CAPSULE, etc), likely a medicine
-    // Or if it looks like a proper medicine name
-    const isMedicineLike = hasMedicineForm ||
-      (/^[A-Z]/i.test(medName) && (medName.match(/[a-zA-Z]{3,}/g) || []).length >= 1);
-
-    if (!isMedicineLike) {
-      console.log(`  ❌ SKIP: Doesn't look like a medicine`);
-      continue;
-    }
-
-    // Check for duplicates
+    // Skip duplicates
     if (medicines.some(m => m.toLowerCase() === medName.toLowerCase())) {
-      console.log(`  ℹ️  SKIP: Duplicate`);
+      console.log(`  ℹ️  Duplicate`);
       continue;
     }
 
     medicines.push(medName);
-    console.log(`  ✅ ADDED: "${medName}"`);
+    console.log(`  ✅ "${medName}"`);
   }
 
   console.log("\n" + "=".repeat(80));
-  console.log(`📊 MEDICINES EXTRACTED: ${medicines.length}`);
-  if (medicines.length > 0) {
-    medicines.forEach((med, idx) => {
-      console.log(`   ${idx + 1}. "${med}"`);
-    });
-  } else {
-    console.log("   (none found)");
-  }
+  console.log(`📊 EXTRACTED: ${medicines.length} medicines`);
+  medicines.forEach((med, idx) => console.log(`   ${idx + 1}. ${med}`));
   console.log("=".repeat(80) + "\n");
 
   return medicines;
 }
 
 /* ════════════════════════════════════════════════════════════════
-   HELPER: Medicine Matching - Simple and Reliable
+   HELPER: Normalize medicine name for matching
+   ════════════════════════════════════════════════════════════════ */
+function normalizeMedicineName(str) {
+  if (!str) return "";
+
+  return str
+    .toLowerCase()
+    .trim()
+    // Remove form types
+    .replace(/\b(tablet|capsule|syrup|injection|cream|gel|ointment|lotion|powder|drops|spray|suspension|patch|liquid|solution|inhaler|cap|tab|inj)\b/gi, "")
+    // Normalize spacing around numbers and units
+    .replace(/\s+(\d+)\s*([a-z]*g|iu|units?|%|mcg)\b/gi, "$1$2") // "10 mg" → "10mg"
+    .replace(/\s+/g, " ") // Multiple spaces to single
+    .trim();
+}
+
+/* ════════════════════════════════════════════════════════════════
+   HELPER: Medicine Matching with improved normalization
    ════════════════════════════════════════════════════════════════ */
 function matchMedicineToDatabase(medicineName, dbMedicines) {
   if (!medicineName || medicineName.trim().length < 3) return null;
 
-  const searchLower = medicineName.toLowerCase().trim();
+  const searchNorm = normalizeMedicineName(medicineName);
 
-  console.log(`\n     ┌─ Matching: "${medicineName}"`);
+  console.log(`\n     Matching: "${medicineName}"`);
+  console.log(`     Normalized: "${searchNorm}"`);
 
-  // Remove form types (tablet, capsule, cream, etc) for comparison
-  const removeFormTypes = (str) => {
-    return str
-      .replace(/\b(tablet|capsule|syrup|injection|cream|gel|ointment|lotion|powder|drops|spray|suspension|patch|liquid|solution|injection|inhaler|medicine|medicament)\b/gi, "")
-      .trim();
-  };
-
-  // Normalize dosages (10 mg -> 10mg, 10 MG -> 10mg)
-  const normalizeDosage = (str) => {
-    return str
-      .replace(/\s+([a-z]*g|iu|units?|%|mcg)\b/gi, "$1") // "10 mg" -> "10mg"
-      .replace(/\s+([a-z]*g|iu|units?|%|mcg)/gi, "$1"); // case-insensitive
-  };
-
-  const afterRemoveForm = removeFormTypes(searchLower);
-  const searchCleaned = normalizeDosage(afterRemoveForm);
-
-  console.log(`     ├─ After removeFormTypes: "${afterRemoveForm}"`);
-  console.log(`     ├─ After normalizeDosage: "${searchCleaned}"`);
-
-  // Show database medicines for debugging
-  console.log(`     ├─ Checking ${dbMedicines.length} database medicines...`);
-
-  // Strategy 1: Case-insensitive exact match
-  let match = dbMedicines.find(
-    (med) => (med.description || "").toLowerCase() === searchLower
-  );
-  if (match) {
-    console.log(`     └─ ✓ EXACT MATCH: "${match.description}"`);
-    return match;
-  }
-
-  // Strategy 2: Match after removing form types and normalizing dosages
-  match = dbMedicines.find((med) => {
-    const descCleaned = normalizeDosage(removeFormTypes((med.description || "").toLowerCase()));
-    return descCleaned === searchCleaned;
+  // Strategy 1: Exact match after normalization
+  let match = dbMedicines.find((med) => {
+    const descNorm = normalizeMedicineName(med.description || "");
+    return descNorm === searchNorm;
   });
   if (match) {
-    console.log(`     └─ ✓ FORM-AND-DOSAGE-NORMALIZED MATCH: "${match.description}"`);
+    console.log(`     ✓ EXACT MATCH: "${match.description}"`);
     return match;
   }
 
-  // Strategy 3: Check if one is substring of the other (must be significant length)
-  if (searchCleaned.length >= 4) {
+  // Strategy 2: Substring match (either direction)
+  if (searchNorm.length >= 4) {
     match = dbMedicines.find((med) => {
-      const desc = normalizeDosage(removeFormTypes((med.description || "").toLowerCase()));
-      return desc.includes(searchCleaned) || searchCleaned.includes(desc);
+      const descNorm = normalizeMedicineName(med.description || "");
+      return (
+        descNorm.includes(searchNorm) ||
+        searchNorm.includes(descNorm)
+      );
     });
     if (match) {
-      console.log(`       ✓ SUBSTRING MATCH: "${match.description}"`);
+      console.log(`     ✓ SUBSTRING MATCH: "${match.description}"`);
       return match;
     }
   }
 
-  // Strategy 4: Token-based matching - get main tokens (medicine name, strength)
-  // Extract medicine name tokens (exclude pure numbers and dosage units)
-  const searchTokens = searchCleaned
+  // Strategy 3: Token-based matching
+  const searchTokens = searchNorm
     .split(/\s+/)
-    .filter((t) => {
-      // Keep tokens that are:
-      // - At least 2 chars, AND
-      // - Either: not pure digits OR not dosage units
-      if (t.length < 2) return false;
-      if (/^\d+$/.test(t)) return false; // Exclude pure numbers like "10"
-      return true;
-    });
+    .filter((t) => t.length >= 2 && !/^\d+$/.test(t));
+
+  console.log(`     Tokens: [${searchTokens.join(", ")}]`);
 
   if (searchTokens.length >= 1) {
-    // Find a medicine where all search tokens appear in description
+    // Find medicine where ALL search tokens appear
     match = dbMedicines.find((med) => {
-      const desc = normalizeDosage(removeFormTypes((med.description || "").toLowerCase()));
-      return searchTokens.every((token) => desc.includes(token));
+      const descNorm = normalizeMedicineName(med.description || "");
+      return searchTokens.every((token) => descNorm.includes(token));
     });
     if (match) {
-      console.log(`       ✓ ALL-TOKENS MATCH: "${match.description}"`);
+      console.log(`     ✓ ALL-TOKENS MATCH: "${match.description}"`);
       return match;
     }
-  }
 
-  // Strategy 5: Partial token matching - at least 50% of tokens must match
-  if (searchTokens.length >= 1) {
+    // Find best partial match (80%+ tokens match)
     let bestMatch = null;
     let bestScore = 0;
 
     for (const med of dbMedicines) {
-      const desc = normalizeDosage(removeFormTypes((med.description || "").toLowerCase()));
-      const descTokens = desc.split(/\s+/).filter((t) => t.length >= 2 && !/^\d+$/.test(t));
+      const descNorm = normalizeMedicineName(med.description || "");
+      const descTokens = descNorm.split(/\s+/).filter((t) => t.length >= 2);
 
-      const matchingTokens = searchTokens.filter((token) =>
-        descTokens.some((dToken) => dToken === token || dToken.includes(token) || token.includes(dToken))
+      const matchingTokens = searchTokens.filter((sToken) =>
+        descTokens.some((dToken) => dToken === sToken || dToken.includes(sToken))
       );
 
-      const score = searchTokens.length > 0 ? matchingTokens.length / searchTokens.length : 0;
+      const score = searchTokens.length > 0
+        ? matchingTokens.length / searchTokens.length
+        : 0;
 
-      if (score > bestScore && score >= 0.5) {
+      if (score > bestScore && score >= 0.8) {
         bestScore = score;
         bestMatch = med;
       }
     }
 
     if (bestMatch) {
-      console.log(`       ✓ PARTIAL-TOKENS MATCH (${(bestScore * 100).toFixed(0)}%): "${bestMatch.description}"`);
+      console.log(`     ✓ PARTIAL MATCH (${(bestScore * 100).toFixed(0)}%): "${bestMatch.description}"`);
       return bestMatch;
     }
   }
 
-  console.log(`     └─ ✗ NO MATCH FOUND`);
-
-  // Debug: Show top database medicines for comparison
-  console.log(`     └─ Top 3 database medicines for reference:`);
-  dbMedicines.slice(0, 3).forEach((med, idx) => {
-    const descCleaned = normalizeDosage(removeFormTypes((med.description || "").toLowerCase()));
-    console.log(`        ${idx + 1}. "${med.description}" → cleaned: "${descCleaned}"`);
-  });
-
+  console.log(`     ✗ NO MATCH FOUND`);
   return null;
 }
 
