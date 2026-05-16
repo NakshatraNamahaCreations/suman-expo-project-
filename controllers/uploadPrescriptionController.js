@@ -23,24 +23,33 @@ exports.extractMedicines = async (req, res) => {
     console.log("File received: " + req.file.originalname);
     console.log("File path: " + filePath);
 
-    // Extract text
+    // Extract text from PDF (may use OCR for scanned PDFs)
     console.log("Extracting text from PDF...");
     let pdfText = "";
 
     try {
       pdfText = await extractTextFromPDF(filePath);
-      console.log("Text extracted: " + pdfText.length + " chars");
+      console.log("Successfully extracted: " + pdfText.length + " characters");
     } catch (pdfErr) {
       console.log("ERROR in PDF extraction: " + pdfErr.message);
-      console.log("Stack: " + pdfErr.stack);
-      // Try to continue without PDF text extraction
-      pdfText = "";
-      console.log("WARNING: Continuing without PDF text...");
+      if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      return res.json({
+        success: false,
+        message: "Could not read PDF: " + pdfErr.message,
+        matchedCount: 0,
+        medicines: [],
+      });
     }
 
     if (!pdfText || pdfText.trim().length === 0) {
-      console.log("ERROR: PDF text is empty");
-      throw new Error("No text extracted from PDF");
+      console.log("ERROR: No text extracted from PDF");
+      if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      return res.json({
+        success: false,
+        message: "PDF is empty or unreadable",
+        matchedCount: 0,
+        medicines: [],
+      });
     }
 
     // Extract medicines
