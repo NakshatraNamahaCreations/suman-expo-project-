@@ -14,121 +14,126 @@ function extractBrandAndStrengthMedicines(text) {
     return [];
   }
 
-  console.log("\n" + "=".repeat(80));
-  console.log("🔍 EXTRACTING MEDICINES FROM PRESCRIPTION");
-  console.log("=".repeat(80));
+  console.log("\n" + "═".repeat(80));
+  console.log("🔍 EXTRACTING MEDICINES FROM BRAND & STRENGTH COLUMN");
+  console.log("═".repeat(80));
 
   const medicines = [];
   const allLines = text.split("\n");
 
-  console.log(`📄 Total lines in raw text: ${allLines.length}`);
+  console.log(`📄 Total lines: ${allLines.length}`);
 
-  // Medicine form types to remove
-  const formTypes = ["tablet", "capsule", "syrup", "injection", "cream", "gel", "ointment", "lotion", "powder", "drops", "spray", "suspension", "patch", "liquid", "solution", "inhaler", "cap", "tab", "inj"];
-  const medPrefixPattern = new RegExp(`^(${formTypes.join("|")})\\s+`, "i");
-  const numberedPattern = /^\d+[\.\)]\s*/;
+  // Form types to recognize and remove
+  const formTypes = ["tablet", "capsule", "syrup", "injection", "cream", "gel", "ointment", "lotion", "powder", "drops", "spray", "suspension", "patch", "liquid", "solution", "inhaler", "cap", "tab", "inj", "amp"];
+  const formPattern = new RegExp(`^(${formTypes.join("|")})\\s+`, "i");
 
-  // Find the "Brand & Strength" header line
-  let headerLineIdx = -1;
+  // Find Brand & Strength header
+  let startIdx = -1;
+  let endIdx = allLines.length;
+
   for (let i = 0; i < allLines.length; i++) {
-    const line = allLines[i];
-    if (line.toLowerCase().includes("brand") && line.toLowerCase().includes("strength")) {
-      headerLineIdx = i;
+    const line = allLines[i].toLowerCase();
+    if (line.includes("brand") && line.includes("strength")) {
+      startIdx = i;
       console.log(`✓ Found "Brand & Strength" header at line ${i}`);
       break;
     }
   }
 
-  if (headerLineIdx === -1) {
-    console.log("⚠️  'Brand & Strength' header not found - will extract from all lines");
-  }
-
-  // Find where the medicine table ends
-  let tableEndIdx = allLines.length;
-  const endMarkers = ["investigation", "observation", "diagnosis", "note", "advice", "instruction"];
-
-  if (headerLineIdx !== -1) {
-    for (let i = headerLineIdx + 1; i < allLines.length; i++) {
+  // Find where table ends
+  if (startIdx !== -1) {
+    const endMarkers = ["investigation", "observation", "diagnosis", "note", "advice", "instruction", "sign", "symptom"];
+    for (let i = startIdx + 1; i < allLines.length; i++) {
       const lower = allLines[i].toLowerCase().trim();
-      if (lower.length > 5 && endMarkers.some(marker => lower.includes(marker))) {
-        tableEndIdx = i;
+      if (lower.length > 5 && endMarkers.some(m => lower.includes(m))) {
+        endIdx = i;
         console.log(`✓ Found table end at line ${i}`);
         break;
       }
     }
-    console.log(`📋 Processing lines ${headerLineIdx + 1} to ${tableEndIdx - 1}`);
   }
 
-  console.log("-".repeat(80));
+  console.log(`📋 Processing lines ${startIdx + 1} to ${endIdx - 1}`);
+  console.log("─".repeat(80));
 
-  const linesToProcess = headerLineIdx !== -1
-    ? allLines.slice(headerLineIdx + 1, tableEndIdx)
+  const linesToProcess = startIdx !== -1
+    ? allLines.slice(startIdx + 1, endIdx)
     : allLines;
 
+  const seenMedicines = new Set();
+
   for (let i = 0; i < linesToProcess.length; i++) {
-    const rawLine = linesToProcess[i];
+    const rawLine = linesToProcess[i].trim();
 
-    if (!rawLine || rawLine.trim().length < 3) continue;
+    // Skip empty lines
+    if (!rawLine || rawLine.length < 2) continue;
 
-    console.log(`[Line ${i}] "${rawLine.substring(0, 80)}${rawLine.length > 80 ? "..." : ""}"`);
+    console.log(`[${i}] "${rawLine.substring(0, 90)}${rawLine.length > 90 ? "..." : ""}"`);
 
-    let medName = rawLine.trim();
+    let medName = rawLine;
 
-    // Remove leading number (1., 2., etc.)
-    medName = medName.replace(numberedPattern, "").trim();
+    // Remove leading numbers (1., 2), etc.)
+    medName = medName.replace(/^\d+[\.\)]\s*/, "").trim();
 
-    // Extract only the first column (before tabs or 2+ spaces)
-    const columnMatch = medName.match(/^([^\t]{1,}?)[\t\s{2,}]/);
-    if (columnMatch) {
-      medName = columnMatch[1].trim();
-      console.log(`  → Column extracted: "${medName}"`);
+    // Extract first column (before multiple spaces or tabs)
+    const firstColMatch = medName.match(/^([^\t\s]{1,}(?:\s+[^\t\s]{1,})*?)(?:\t|\s{2,}|$)/);
+    if (firstColMatch) {
+      medName = firstColMatch[1].trim();
     }
 
-    // Remove form type prefix (TABLET, CAPSULE, CREAM, etc.)
-    const formMatch = medName.match(medPrefixPattern);
+    // Remove form type prefix
+    const formMatch = medName.match(formPattern);
     if (formMatch) {
       medName = medName.substring(formMatch[0].length).trim();
-      console.log(`  → Form type removed: "${medName}"`);
+      console.log(`   Form removed: "${medName}"`);
     }
 
-    // Clean up
+    // Clean up whitespace and punctuation
     medName = medName
-      .replace(/\s+/g, " ") // Normalize spaces
-      .replace(/[,;:\.\?\!]+$/, "") // Remove trailing punctuation
+      .replace(/\s+/g, " ")
+      .replace(/[,;:\.\?\!]*$/, "")
       .trim();
 
-    // Validation checks
+    // Validate
     if (medName.length < 3) {
-      console.log(`  ❌ Too short`);
+      console.log(`   ❌ Too short`);
       continue;
     }
 
     if (!/[a-zA-Z]/i.test(medName)) {
-      console.log(`  ❌ No letters`);
+      console.log(`   ❌ No letters`);
       continue;
     }
 
-    // Skip metadata words
-    const metadata = ["dose", "freq", "frequency", "duration", "instruction", "food", "meal"];
-    if (metadata.some(m => medName.toLowerCase().includes(m))) {
-      console.log(`  ❌ Metadata`);
+    // Skip common non-medicine words
+    const skipWords = ["dose", "freq", "frequency", "duration", "instruction", "food", "meal", "morning", "afternoon", "evening", "night", "after", "before"];
+    if (skipWords.some(w => medName.toLowerCase() === w)) {
+      console.log(`   ❌ Skip word`);
       continue;
     }
 
-    // Skip duplicates
-    if (medicines.some(m => m.toLowerCase() === medName.toLowerCase())) {
-      console.log(`  ℹ️  Duplicate`);
+    // Check for duplicates
+    const nameLower = medName.toLowerCase();
+    if (seenMedicines.has(nameLower)) {
+      console.log(`   ℹ️  Duplicate`);
       continue;
     }
 
+    seenMedicines.add(nameLower);
     medicines.push(medName);
-    console.log(`  ✅ "${medName}"`);
+    console.log(`   ✅ EXTRACTED: "${medName}"`);
   }
 
-  console.log("\n" + "=".repeat(80));
-  console.log(`📊 EXTRACTED: ${medicines.length} medicines`);
-  medicines.forEach((med, idx) => console.log(`   ${idx + 1}. ${med}`));
-  console.log("=".repeat(80) + "\n");
+  console.log("\n" + "═".repeat(80));
+  console.log(`📊 TOTAL MEDICINES EXTRACTED: ${medicines.length}`);
+  if (medicines.length > 0) {
+    medicines.forEach((med, idx) => {
+      console.log(`   [${idx + 1}] ${med}`);
+    });
+  } else {
+    console.log("   (none found)");
+  }
+  console.log("═".repeat(80) + "\n");
 
   return medicines;
 }
@@ -503,13 +508,18 @@ exports.extractMedicines = async (req, res) => {
       unmatchedMedicines,
     };
 
-    if (extractedMedicines.length === 0 && !extractedText) {
-      console.log("⚠️  No text extracted from file");
-      baseResponse.message = "No medicines could be extracted from the prescription. Please ensure the prescription is clear and contains medicine names.";
+    if (!extractedText || extractedText.length === 0) {
+      console.log("⚠️  No text extracted from file - PDF extraction failed");
+      baseResponse.message = "Could not extract text from PDF. The file might be corrupted or in an unsupported format. Try uploading an image instead.";
+    } else if (extractedMedicines.length === 0) {
+      console.log("⚠️  Text extracted but no medicines found in Brand & Strength column");
+      baseResponse.message = "Text was extracted from the PDF, but no medicine names could be found. Please ensure the prescription contains a 'Brand & Strength' column with medicine names.";
     } else if (matchedMedicines.length > 0) {
       baseResponse.message = `✓ Found ${matchedMedicines.length} matching medicine(s) in your inventory`;
+    } else if (unmatchedMedicines.length > 0) {
+      baseResponse.message = `Extracted ${extractedMedicines.length} medicine name(s), but none matched your inventory database. Please add these medicines or check the database.`;
     } else {
-      baseResponse.message = `No matching medicines found. Extracted ${extractedMedicines.length} names, but none matched the inventory.`;
+      baseResponse.message = "No medicines could be extracted from the prescription.";
     }
 
     console.log(`✅ Response: ${baseResponse.matchedCount} matched, ${baseResponse.unmatchedCount} unmatched`);
