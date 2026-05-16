@@ -381,34 +381,46 @@ exports.extractMedicines = async (req, res) => {
     // EXTRACT MEDICINES FROM TEXT
     // ══════════════════════════════════════════════════════════════
     if (!extractedText || extractedText.trim().length === 0) {
-      console.log("⚠️  No text extracted from file");
+      console.log("\n❌ NO TEXT EXTRACTED FROM FILE");
+      console.log("   Text extraction returned empty");
     } else {
-      console.log(`📝 Extracted text length: ${extractedText.length} characters`);
-      console.log("🔍 Extracting medicine names from text...");
+      console.log(`\n📝 EXTRACTED TEXT RECEIVED`);
+      console.log(`   Length: ${extractedText.length} characters`);
+      console.log(`   First 500 chars:\n${extractedText.substring(0, 500)}`);
+      console.log(`   ...\n`);
 
-      // Strategy 1: Try to extract from Brand & Strength column
+      console.log("🔍 STRATEGY 1: Extracting medicines from Brand & Strength column...");
       let brandStrengthMedicines = extractBrandAndStrengthMedicines(extractedText);
 
       if (brandStrengthMedicines.length > 0) {
-        console.log(`   ✓ Found ${brandStrengthMedicines.length} medicines in Brand & Strength column`);
+        console.log(`\n✅ STRATEGY 1 SUCCESS: Found ${brandStrengthMedicines.length} medicines`);
         extractedMedicines = brandStrengthMedicines.map((name) => ({
           name,
           frequency: "1-0-1",
           duration: 5,
         }));
       } else {
+        console.log(`\n⚠️  STRATEGY 1 FAILED: No medicines found`);
+
         // Strategy 2: Use parsePrescriptionText as fallback
-        console.log(`   Trying parsePrescriptionText as fallback...`);
+        console.log(`\n🔍 STRATEGY 2: Using parsePrescriptionText as fallback...`);
         const parsed = parsePrescriptionText(extractedText);
         if (parsed && parsed.medicines && parsed.medicines.length > 0) {
           extractedMedicines = parsed.medicines;
           extractedDoctor = parsed.doctor || null;
-          console.log(`   ✓ Extracted ${extractedMedicines.length} medicines from parsed text`);
-          if (extractedDoctor) console.log(`   ✓ Doctor: ${extractedDoctor}`);
+          console.log(`✅ STRATEGY 2 SUCCESS: Found ${extractedMedicines.length} medicines`);
+          extractedMedicines.forEach((med, idx) => {
+            console.log(`   ${idx + 1}. ${med.name} (${med.frequency})`);
+          });
+          if (extractedDoctor) console.log(`   Doctor: ${extractedDoctor}`);
         } else {
+          console.log(`⚠️  STRATEGY 2 FAILED: No medicines found`);
+
           // Strategy 3: Fallback to line-by-line extraction
-          console.log(`   Trying line-by-line extraction as final fallback...`);
+          console.log(`\n🔍 STRATEGY 3: Line-by-line extraction as final fallback...`);
           const lines = extractedText.split("\n");
+          console.log(`   Total lines: ${lines.length}`);
+
           for (const line of lines) {
             const cleaned = line
               .replace(/^[-•*]\s*/, "") // Remove bullets
@@ -431,7 +443,12 @@ exports.extractMedicines = async (req, res) => {
               }
             }
           }
-          console.log(`   ✓ Extracted ${extractedMedicines.length} lines from text`);
+          console.log(`✅ STRATEGY 3 SUCCESS: Extracted ${extractedMedicines.length} lines`);
+          if (extractedMedicines.length > 0) {
+            extractedMedicines.forEach((med, idx) => {
+              console.log(`   ${idx + 1}. ${med.name}`);
+            });
+          }
         }
       }
     }
