@@ -26,22 +26,6 @@ const logUpload = (req, res, next) => {
   next();
 };
 
-// PDF prescription upload
-router.post(
-  "/upload-prescription",
-  upload.single("file"),
-  logUpload,
-  uploadController.processPDFPrescription
-);
-
-// Image prescription upload (camera/gallery)
-router.post(
-  "/upload-image",
-  upload.single("file"),
-  logUpload,
-  uploadController.processImagePrescription
-);
-
 // Unified medicine extraction (PDF, Excel, Image)
 router.post(
   "/extract-medicines",
