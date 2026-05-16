@@ -29,7 +29,7 @@ const extractTextFromPDF = async (filePath) => {
     // ✅ If PDF has readable text
     if (text && text.length > 20) {
       console.log(`✅ PDF parsed successfully, extracted ${text.length} characters`);
-      return text.toLowerCase();
+      return text; // Don't lowercase - preserve case for better medicine detection
     }
 
     console.log(`⚠️  PDF text too short (${text?.length || 0} chars), falling back to OCR`);
@@ -44,7 +44,7 @@ const extractTextFromPDF = async (filePath) => {
     const ocrText = await extractTextFromImage(filePath);
     console.log(`🔥 OCR fallback returned: ${ocrText?.length || 0} characters`);
 
-    return ocrText.toLowerCase();
+    return ocrText; // Don't lowercase - preserve case for better medicine detection
   }
 };
 

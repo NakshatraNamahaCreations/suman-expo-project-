@@ -15,7 +15,7 @@ function extractBrandAndStrengthMedicines(text) {
   }
 
   console.log("\n" + "=".repeat(80));
-  console.log("🔍 EXTRACTING MEDICINES FROM BRAND & STRENGTH COLUMN");
+  console.log("🔍 EXTRACTING MEDICINES FROM PRESCRIPTION");
   console.log("=".repeat(80));
 
   const medicines = [];
@@ -23,45 +23,55 @@ function extractBrandAndStrengthMedicines(text) {
 
   console.log(`📄 Total lines in raw text: ${allLines.length}`);
 
-  // Find the "Brand & Strength" header line
+  // Medicine prefix patterns
+  const medPrefixPattern = /^(tablet|capsule|syrup|injection|cream|gel|ointment|drops|suspension|spray|patch|liquid|powder)\s+/i;
+  const numberedPattern = /^\d+[\.\)]\s*/;
+
+  // Find the "Brand & Strength" header line (optional - some PDFs have it)
   let headerLineIdx = -1;
   for (let i = 0; i < allLines.length; i++) {
     const line = allLines[i];
     if (line.toLowerCase().includes("brand") && line.toLowerCase().includes("strength")) {
       headerLineIdx = i;
       console.log(`\n✓ Found "Brand & Strength" header at line ${i}`);
-      console.log(`  Content: "${line}"`);
       break;
     }
   }
 
   if (headerLineIdx === -1) {
-    console.log("\n❌ ERROR: 'Brand & Strength' header not found!");
-    console.log("Showing first 15 lines for debugging:");
-    for (let i = 0; i < Math.min(15, allLines.length); i++) {
-      console.log(`  Line ${i}: "${allLines[i].substring(0, 100)}"`);
-    }
-    return [];
+    console.log("\n⚠️  'Brand & Strength' header not found - will extract medicines from any medicine-looking lines");
   }
 
   // Find where the medicine table ends (look for "Investigation", "Observation", etc.)
   let tableEndIdx = allLines.length;
-  const endMarkers = ["investigation", "observation", "diagnosis", "note", "sign"];
-  for (let i = headerLineIdx + 1; i < allLines.length; i++) {
-    const lower = allLines[i].toLowerCase().trim();
-    if (lower.length > 5 && endMarkers.some(marker => lower.startsWith(marker))) {
-      tableEndIdx = i;
-      console.log(`✓ Found table end at line ${i}`);
-      break;
+  const endMarkers = ["investigation", "observation", "diagnosis", "note", "sign", "advice", "instruction", "follow"];
+
+  if (headerLineIdx !== -1) {
+    // If we found a table header, look for the end
+    for (let i = headerLineIdx + 1; i < allLines.length; i++) {
+      const lower = allLines[i].toLowerCase().trim();
+      if (lower.length > 5 && endMarkers.some(marker => lower.includes(marker))) {
+        tableEndIdx = i;
+        console.log(`✓ Found table end at line ${i}`);
+        break;
+      }
     }
+    console.log(`\n📋 Processing lines ${headerLineIdx + 1} to ${tableEndIdx - 1}`);
+  } else {
+    // If no header found, process all lines looking for medicine patterns
+    console.log(`\n📋 Scanning all ${allLines.length} lines for medicine patterns`);
   }
 
-  console.log(`\n📋 Processing lines ${headerLineIdx + 1} to ${tableEndIdx - 1}`);
   console.log("-".repeat(80));
 
-  // Process each line in the medicine table
-  for (let i = headerLineIdx + 1; i < tableEndIdx; i++) {
-    const rawLine = allLines[i];
+  // Determine which lines to process
+  const linesToProcess = headerLineIdx !== -1
+    ? allLines.slice(headerLineIdx + 1, tableEndIdx)
+    : allLines;
+
+  // Process each line
+  for (let i = 0; i < linesToProcess.length; i++) {
+    const rawLine = linesToProcess[i];
 
     // Skip empty lines
     if (!rawLine || rawLine.trim().length < 3) {
@@ -70,25 +80,21 @@ function extractBrandAndStrengthMedicines(text) {
 
     console.log(`\n[Line ${i}] "${rawLine.substring(0, 100)}${rawLine.length > 100 ? '...' : ''}"`);
 
-    // Extract the medicine name - it's the numbered item at the start
-    // Pattern: "1. TABLET NAME" or "1  TABLET NAME" or "1. TABLET NAME  (then other columns)"
-
     let medName = rawLine.trim();
 
     // Remove leading number (1., 2., 1), 2), etc.)
-    const numberMatch = medName.match(/^[\(\[]?\d+[\.\)\]\s]+/);
-    if (numberMatch) {
-      medName = medName.substring(numberMatch[0].length).trim();
-      console.log(`  After removing number: "${medName}"`);
-    }
+    medName = medName.replace(numberedPattern, "").trim();
 
     // Now extract only the Brand & Strength part (before other columns)
     // Columns are typically separated by 2+ spaces or tabs
     const columnSeparator = medName.match(/\t+|\s{2,}/);
-    if (columnSeparator) {
+    if (columnSeparator && columnSeparator.index > 0) {
       medName = medName.substring(0, columnSeparator.index).trim();
       console.log(`  After extracting first column: "${medName}"`);
     }
+
+    // Check if line starts with medicine form type (TABLET, CAPSULE, etc)
+    const hasMedicineForm = medPrefixPattern.test(medName);
 
     // Clean up
     medName = medName
@@ -96,7 +102,7 @@ function extractBrandAndStrengthMedicines(text) {
       .replace(/[,;:\.\?\!]+$/, "") // Remove trailing punctuation
       .trim();
 
-    // Validation
+    // Skip if empty after cleaning
     if (medName.length < 4) {
       console.log(`  ❌ SKIP: Too short (${medName.length} chars)`);
       continue;
@@ -109,15 +115,16 @@ function extractBrandAndStrengthMedicines(text) {
     }
 
     // Must not be just common metadata
-    const metadata = ["dose", "freq", "duration", "instruction", "food", "meal", "day", "days"];
+    const metadata = ["dose", "freq", "frequency", "duration", "instruction", "instructions", "food", "meal", "day", "days", "hrs", "hours", "times", "morning", "afternoon", "evening", "night", "route"];
     if (metadata.includes(medName.toLowerCase())) {
       console.log(`  ❌ SKIP: Metadata word`);
       continue;
     }
 
-    // Must look like a medicine (typically starts with uppercase, or contains TABLET/CREAM/etc)
-    const isMedicineLike = /^[A-Z]/i.test(medName) &&
-      (medName.match(/[a-zA-Z]{3,}/g) || []).length >= 1;
+    // If we found a medicine form (TABLET, CAPSULE, etc), likely a medicine
+    // Or if it looks like a proper medicine name
+    const isMedicineLike = hasMedicineForm ||
+      (/^[A-Z]/i.test(medName) && (medName.match(/[a-zA-Z]{3,}/g) || []).length >= 1);
 
     if (!isMedicineLike) {
       console.log(`  ❌ SKIP: Doesn't look like a medicine`);
@@ -466,7 +473,9 @@ exports.extractMedicines = async (req, res) => {
       res.json(baseResponse);
     } else {
       baseResponse.message =
-        "No matching medicines found in your inventory database. Please check the prescription or add these medicines to your inventory.";
+        extractedMedicines.length === 0
+          ? "No medicines could be extracted from the prescription. Please ensure the prescription is clear and contains medicine names."
+          : `No matching medicines found in your inventory database. ${unmatchedMedicines.length} medicine(s) not found: ${unmatchedMedicines.map(m => m.name).join(", ")}. Please check the prescription or add these medicines to your inventory.`;
       res.json(baseResponse);
     }
   } catch (error) {
