@@ -163,40 +163,54 @@ function matchMedicineToDatabase(medicineName, dbMedicines) {
 
   const searchLower = medicineName.toLowerCase().trim();
 
-  console.log(`\n     Matching: "${medicineName}"`);
+  console.log(`\n     ┌─ Matching: "${medicineName}"`);
 
   // Remove form types (tablet, capsule, cream, etc) for comparison
   const removeFormTypes = (str) => {
     return str
-      .replace(/\b(tablet|capsule|syrup|injection|cream|gel|ointment|lotion|powder|drops|spray|suspension|patch|liquid|solution)\b/gi, "")
+      .replace(/\b(tablet|capsule|syrup|injection|cream|gel|ointment|lotion|powder|drops|spray|suspension|patch|liquid|solution|injection|inhaler|medicine|medicament)\b/gi, "")
       .trim();
   };
 
-  const searchCleaned = removeFormTypes(searchLower);
+  // Normalize dosages (10 mg -> 10mg, 10 MG -> 10mg)
+  const normalizeDosage = (str) => {
+    return str
+      .replace(/\s+([a-z]*g|iu|units?|%|mcg)\b/gi, "$1") // "10 mg" -> "10mg"
+      .replace(/\s+([a-z]*g|iu|units?|%|mcg)/gi, "$1"); // case-insensitive
+  };
+
+  const afterRemoveForm = removeFormTypes(searchLower);
+  const searchCleaned = normalizeDosage(afterRemoveForm);
+
+  console.log(`     ├─ After removeFormTypes: "${afterRemoveForm}"`);
+  console.log(`     ├─ After normalizeDosage: "${searchCleaned}"`);
+
+  // Show database medicines for debugging
+  console.log(`     ├─ Checking ${dbMedicines.length} database medicines...`);
 
   // Strategy 1: Case-insensitive exact match
   let match = dbMedicines.find(
     (med) => (med.description || "").toLowerCase() === searchLower
   );
   if (match) {
-    console.log(`       ✓ EXACT MATCH: "${match.description}"`);
+    console.log(`     └─ ✓ EXACT MATCH: "${match.description}"`);
     return match;
   }
 
-  // Strategy 2: Match after removing form types
+  // Strategy 2: Match after removing form types and normalizing dosages
   match = dbMedicines.find((med) => {
-    const descCleaned = removeFormTypes((med.description || "").toLowerCase());
+    const descCleaned = normalizeDosage(removeFormTypes((med.description || "").toLowerCase()));
     return descCleaned === searchCleaned;
   });
   if (match) {
-    console.log(`       ✓ FORM-NORMALIZED MATCH: "${match.description}"`);
+    console.log(`     └─ ✓ FORM-AND-DOSAGE-NORMALIZED MATCH: "${match.description}"`);
     return match;
   }
 
   // Strategy 3: Check if one is substring of the other (must be significant length)
   if (searchCleaned.length >= 4) {
     match = dbMedicines.find((med) => {
-      const desc = removeFormTypes((med.description || "").toLowerCase());
+      const desc = normalizeDosage(removeFormTypes((med.description || "").toLowerCase()));
       return desc.includes(searchCleaned) || searchCleaned.includes(desc);
     });
     if (match) {
@@ -205,15 +219,23 @@ function matchMedicineToDatabase(medicineName, dbMedicines) {
     }
   }
 
-  // Strategy 4: Token-based matching - all significant tokens must match
+  // Strategy 4: Token-based matching - get main tokens (medicine name, strength)
+  // Extract medicine name tokens (exclude pure numbers and dosage units)
   const searchTokens = searchCleaned
     .split(/\s+/)
-    .filter((t) => t.length >= 2 && !/^\d+$/.test(t));
+    .filter((t) => {
+      // Keep tokens that are:
+      // - At least 2 chars, AND
+      // - Either: not pure digits OR not dosage units
+      if (t.length < 2) return false;
+      if (/^\d+$/.test(t)) return false; // Exclude pure numbers like "10"
+      return true;
+    });
 
-  if (searchTokens.length >= 2) {
+  if (searchTokens.length >= 1) {
     // Find a medicine where all search tokens appear in description
     match = dbMedicines.find((med) => {
-      const desc = removeFormTypes((med.description || "").toLowerCase());
+      const desc = normalizeDosage(removeFormTypes((med.description || "").toLowerCase()));
       return searchTokens.every((token) => desc.includes(token));
     });
     if (match) {
@@ -222,22 +244,22 @@ function matchMedicineToDatabase(medicineName, dbMedicines) {
     }
   }
 
-  // Strategy 5: Partial token matching - at least 60% of tokens must match
-  if (searchTokens.length >= 2) {
+  // Strategy 5: Partial token matching - at least 50% of tokens must match
+  if (searchTokens.length >= 1) {
     let bestMatch = null;
     let bestScore = 0;
 
     for (const med of dbMedicines) {
-      const desc = removeFormTypes((med.description || "").toLowerCase());
-      const descTokens = desc.split(/\s+/).filter((t) => t.length >= 2);
+      const desc = normalizeDosage(removeFormTypes((med.description || "").toLowerCase()));
+      const descTokens = desc.split(/\s+/).filter((t) => t.length >= 2 && !/^\d+$/.test(t));
 
       const matchingTokens = searchTokens.filter((token) =>
-        descTokens.some((dToken) => dToken === token || dToken.includes(token))
+        descTokens.some((dToken) => dToken === token || dToken.includes(token) || token.includes(dToken))
       );
 
-      const score = matchingTokens.length / searchTokens.length;
+      const score = searchTokens.length > 0 ? matchingTokens.length / searchTokens.length : 0;
 
-      if (score > bestScore && score >= 0.6) {
+      if (score > bestScore && score >= 0.5) {
         bestScore = score;
         bestMatch = med;
       }
@@ -249,7 +271,15 @@ function matchMedicineToDatabase(medicineName, dbMedicines) {
     }
   }
 
-  console.log(`       ✗ NO MATCH FOUND`);
+  console.log(`     └─ ✗ NO MATCH FOUND`);
+
+  // Debug: Show top database medicines for comparison
+  console.log(`     └─ Top 3 database medicines for reference:`);
+  dbMedicines.slice(0, 3).forEach((med, idx) => {
+    const descCleaned = normalizeDosage(removeFormTypes((med.description || "").toLowerCase()));
+    console.log(`        ${idx + 1}. "${med.description}" → cleaned: "${descCleaned}"`);
+  });
+
   return null;
 }
 
