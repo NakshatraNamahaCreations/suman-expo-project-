@@ -286,7 +286,14 @@ exports.extractMedicines = async (req, res) => {
       console.log("📄 Attempting PDF extraction...");
       try {
         console.log(`   Calling extractTextFromPDF...`);
-        extractedText = await extractTextFromPDF(filePath);
+
+        // Set a timeout for PDF extraction (10 seconds max)
+        const extractionPromise = extractTextFromPDF(filePath);
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("PDF extraction timeout")), 10000)
+        );
+
+        extractedText = await Promise.race([extractionPromise, timeoutPromise]);
         console.log(`   ✅ Extraction completed. Text length: ${extractedText?.length || 0}`);
         if (extractedText && extractedText.length > 0) {
           console.log(`   First 200 chars: ${extractedText.substring(0, 200)}`);
@@ -301,12 +308,21 @@ exports.extractMedicines = async (req, res) => {
       fileType = "image";
       console.log("📷 Processing image file...");
       try {
-        extractedText = await extractTextFromImage(filePath);
+        console.log(`   Calling extractTextFromImage...`);
+
+        // Set a timeout for image extraction (8 seconds max)
+        const extractionPromise = extractTextFromImage(filePath);
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Image extraction timeout")), 8000)
+        );
+
+        extractedText = await Promise.race([extractionPromise, timeoutPromise]);
         console.log(
           `   ✓ Extracted ${extractedText?.length || 0} characters from image`
         );
       } catch (err) {
         console.error("   ✗ Image extraction failed:", err.message);
+        extractedText = "";
       }
     } else if (
       mimetype.includes("spreadsheet") ||
