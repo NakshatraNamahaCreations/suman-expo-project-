@@ -1,6 +1,6 @@
 const fs = require("fs");
 const Medicine = require("../models/Medicine");
-const extractTextFromPDF = require("../utils/pdfReader");
+const extractTextFromPDF = require("../utils/simplePdfReader");
 
 exports.extractMedicines = async (req, res) => {
   let filePath = null;
@@ -32,7 +32,10 @@ exports.extractMedicines = async (req, res) => {
       console.log("Text extracted: " + pdfText.length + " chars");
     } catch (pdfErr) {
       console.log("ERROR in PDF extraction: " + pdfErr.message);
-      throw new Error("Failed to extract text from PDF");
+      console.log("Stack: " + pdfErr.stack);
+      // Try to continue without PDF text extraction
+      pdfText = "";
+      console.log("WARNING: Continuing without PDF text...");
     }
 
     if (!pdfText || pdfText.trim().length === 0) {
