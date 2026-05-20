@@ -2,7 +2,7 @@ const fs = require("fs");
 const Medicine = require("../models/Medicine");
 const extractTextFromPDF = require("../utils/simplePdfReader");
 const extractTextFromImagePDF = require("../utils/ocrExtractor");
-const extractTextWithTesseract = require("../utils/tesseractOCR");
+const extractTextWithAlternativeOCR = require("../utils/alternativeOCR");
 
 /**
  * Normalize text for matching
@@ -206,21 +206,21 @@ exports.extractMedicines = async (req, res) => {
         console.log("✅ OCR.space API extraction successful: " + pdfText.length + " characters\n");
       } catch (ocrErr) {
         console.error("\n⚠️ OCR.space API failed: " + ocrErr.message);
-        console.log("Attempting fallback to local Tesseract.js OCR...\n");
+        console.log("Attempting fallback to alternative OCR service...\n");
 
         try {
-          pdfText = await extractTextWithTesseract(filePath);
-          console.log("✅ Tesseract fallback extraction successful: " + pdfText.length + " characters\n");
-        } catch (tesseractErr) {
-          console.error("\n❌ BOTH OCR METHODS FAILED");
-          console.error("OCR.space Error: " + ocrErr.message);
-          console.error("Tesseract Error: " + tesseractErr.message);
+          pdfText = await extractTextWithAlternativeOCR(filePath);
+          console.log("✅ Alternative OCR extraction successful: " + pdfText.length + " characters\n");
+        } catch (altOcrErr) {
+          console.error("\n❌ ALL OCR METHODS FAILED");
+          console.error("Primary OCR (OCR.space) Error: " + ocrErr.message);
+          console.error("Fallback OCR Error: " + altOcrErr.message);
 
           if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
 
           return res.json({
             success: false,
-            message: "Could not extract text. OCR.space failed (" + ocrErr.message + "), Tesseract failed (" + tesseractErr.message + ")",
+            message: "Could not extract text from prescription. Both OCR services failed. Please ensure the PDF is clear and readable.",
             brandStrength: [],
             extractedCount: 0,
             matchedCount: 0,
