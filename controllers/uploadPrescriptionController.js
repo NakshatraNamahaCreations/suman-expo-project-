@@ -18,61 +18,79 @@ function normalizeText(text) {
 }
 
 /**
- * Extract medicine names from PDF text (Brand & Strength column)
+ * Extract medicine names from prescription table (Medicine/Brand & Strength column)
  */
-function extractMedicinesFromBrandStrength(text) {
+function extractMedicinesFromPrescription(text) {
   const lines = text.split("\n").map(l => l.trim()).filter(l => l);
+  const medicines = [];
+
+  console.log("Looking for prescription table...");
   let startIdx = -1;
 
-  // Find "Brand & Strength" header
+  // Find prescription table header - look for lines with table columns
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i].toLowerCase().includes("brand") && lines[i].toLowerCase().includes("strength")) {
+    const line = lines[i].toLowerCase();
+    if ((line.includes("medicine") || line.includes("brand")) &&
+        (line.includes("dosage") || line.includes("duration") || line.includes("strength"))) {
       startIdx = i;
-      console.log("Found Brand & Strength header at line " + (i + 1));
+      console.log("Found prescription table at line " + (i + 1));
       break;
     }
   }
 
   if (startIdx === -1) {
-    console.log("ERROR: Could not find Brand & Strength header");
+    console.log("WARNING: Could not find prescription table");
     return [];
   }
-
-  const medicines = [];
-  const endMarkers = ["investigation", "observation", "diagnosis", "note", "instruction"];
 
   // Extract medicines from lines after header
   for (let i = startIdx + 1; i < lines.length; i++) {
     const line = lines[i];
 
-    // Stop if we reach another section
-    if (endMarkers.some(m => line.toLowerCase().includes(m))) {
-      console.log("Reached end of medicines section");
-      break;
-    }
+    // Stop at footer or signature sections
+    if (line.toLowerCase().includes("doctor") || line.toLowerCase().includes("signature") ||
+        line.toLowerCase().includes("medlink") || line === "") continue;
 
-    if (!line || line.length === 0) continue;
-    if (line.includes("---")) continue;
+    // Skip separator lines
+    if (line.match(/^[-_]{3,}$/)) continue;
 
-    // Extract first column (Brand & Strength is first column)
-    let medName = line;
+    // Skip header-like lines
+    if (line.match(/^(No|Medicine|Dosage|Duration|Brand|Strength|Quantity)/i)) continue;
 
-    // Handle pipe-separated columns
+    let medName = line.trim();
+
+    // Handle pipe-separated columns (table format)
     if (line.includes("|")) {
-      medName = line.split("|")[0];
+      const parts = line.split("|");
+      if (parts.length >= 2) {
+        // Medicine is typically the 2nd column
+        medName = parts[1].trim();
+      }
     } else {
-      // Handle space-separated columns
-      const parts = line.split(/\s{2,}/);
-      medName = parts[0];
+      // Handle space-separated table format
+      // Pattern: 1 Paracetamol 500mg 1-0-1 30 days 60
+      const parts = line.split(/\s+/);
+      if (parts.length >= 2 && /^\d+$/.test(parts[0])) {
+        // Remove the leading number (row number)
+        parts.shift();
+        // Get everything before dosage pattern (1-0-1 format)
+        let remaining = parts.join(" ");
+        const dosageMatch = remaining.match(/\s*(\d+-\d+-\d+)/);
+        if (dosageMatch) {
+          medName = remaining.substring(0, dosageMatch.index).trim();
+        } else {
+          medName = parts.join(" ").split(/\s{2,}/)[0];
+        }
+      }
     }
 
-    // Remove leading numbers (1., 2), etc.)
-    medName = medName.replace(/^\d+[\.\)]\s*/, "").trim();
+    // Clean up the medicine name
+    medName = medName.trim();
 
-    // Validate medicine name
-    if (medName && medName.length >= 3 && /[a-zA-Z]/.test(medName)) {
+    // Validate medicine name (should have letters and be reasonably long)
+    if (medName && medName.length >= 2 && /[a-zA-Z]/.test(medName)) {
       medicines.push(medName);
-      console.log("Extracted: " + medName);
+      console.log("Extracted medicine: " + medName);
     }
   }
 
@@ -178,18 +196,19 @@ exports.extractMedicines = async (req, res) => {
       });
     }
 
-    // Extract medicines from Brand & Strength column
-    console.log("STEP 1: Extracting medicines from Brand & Strength column...");
-    const extractedMedicines = extractMedicinesFromBrandStrength(pdfText);
+    // Extract medicines from prescription table
+    console.log("STEP 1: Extracting medicines from prescription table...");
+    const extractedMedicines = extractMedicinesFromPrescription(pdfText);
     console.log("Total extracted: " + extractedMedicines.length + " medicines\n");
 
     if (extractedMedicines.length === 0) {
       if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
       return res.json({
         success: false,
-        message: "No medicines found in Brand & Strength column",
+        message: "No medicines found in prescription",
         matchedCount: 0,
         medicines: [],
+        extractedMedicines: [],
       });
     }
 
@@ -250,13 +269,21 @@ exports.extractMedicines = async (req, res) => {
       fs.unlinkSync(filePath);
     }
 
-    console.log("\n" + "=".repeat(80) + "\n");
+    console.log("\n" + "=".repeat(80));
+    console.log("EXTRACTED MEDICINES FROM PRESCRIPTION:");
+    console.log("=".repeat(80));
+    extractedMedicines.forEach((med, i) => {
+      console.log((i + 1) + ". " + med);
+    });
+    console.log("=".repeat(80) + "\n");
 
     return res.json({
       success: matchedMedicines.length > 0,
       message: matchedMedicines.length > 0
         ? "Found " + matchedMedicines.length + " matching medicine(s) in inventory"
-        : "No matching medicines found in database",
+        : "Medicines extracted, no matches found in database",
+      extractedMedicines: extractedMedicines,
+      extractedCount: extractedMedicines.length,
       matchedCount: matchedMedicines.length,
       unmatchedCount: unmatchedMedicines.length,
       medicines: matchedMedicines,
@@ -278,6 +305,7 @@ exports.extractMedicines = async (req, res) => {
       message: error.message || "Server error processing prescription",
       matchedCount: 0,
       medicines: [],
+      extractedMedicines: [],
     });
   }
 };
