@@ -19,83 +19,104 @@ function normalizeText(text) {
 }
 
 /**
- * Extract medicine names from prescription table (Medicine/Brand & Strength column)
+ * Extract Brand & Strength values from prescription text
+ * Looks for the Brand & Strength column and extracts medicine names
  */
-function extractMedicinesFromPrescription(text) {
-  const lines = text.split("\n").map(l => l.trim()).filter(l => l);
-  const medicines = [];
+function extractBrandStrengthValues(text) {
+  const lines = text.split("\n");
+  const brandStrengthValues = [];
 
-  console.log("Looking for prescription table...");
+  console.log("\n" + "=".repeat(80));
+  console.log("EXTRACTING BRAND & STRENGTH VALUES");
+  console.log("=".repeat(80));
+
   let startIdx = -1;
 
-  // Find prescription table header - look for lines with table columns
+  // Find Brand & Strength header or similar
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].toLowerCase();
-    if ((line.includes("medicine") || line.includes("brand")) &&
-        (line.includes("dosage") || line.includes("duration") || line.includes("strength"))) {
+    // Look for table headers containing medicine/brand/strength info
+    if ((line.includes("brand") || line.includes("medicine")) &&
+        (line.includes("strength") || line.includes("dosage") || line.includes("duration"))) {
       startIdx = i;
-      console.log("Found prescription table at line " + (i + 1));
+      console.log("Found prescription table header at line " + (i + 1));
+      console.log("Header: " + lines[i]);
       break;
     }
   }
 
   if (startIdx === -1) {
-    console.log("WARNING: Could not find prescription table");
+    console.log("WARNING: Could not find prescription table header");
     return [];
   }
 
   // Extract medicines from lines after header
   for (let i = startIdx + 1; i < lines.length; i++) {
-    const line = lines[i];
+    let line = lines[i].trim();
 
-    // Stop at footer or signature sections
-    if (line.toLowerCase().includes("doctor") || line.toLowerCase().includes("signature") ||
-        line.toLowerCase().includes("medlink") || line === "") continue;
+    // Stop conditions
+    if (!line || line === "") continue;
+    if (line.match(/^[-_]{3,}/)) continue; // Separator lines
+    if (line.toLowerCase().includes("doctor") || line.toLowerCase().includes("signature")) break;
+    if (line.toLowerCase().includes("medlink") || line.toLowerCase().includes("note")) break;
 
-    // Skip separator lines
-    if (line.match(/^[-_]{3,}$/)) continue;
+    // Skip if it looks like a header row
+    if (line.match(/^(No|Sr|Medicine|Brand|Dosage|Duration|Frequency|Quantity|Strength)/i)) continue;
 
-    // Skip header-like lines
-    if (line.match(/^(No|Medicine|Dosage|Duration|Brand|Strength|Quantity)/i)) continue;
+    let medName = "";
 
-    let medName = line.trim();
-
-    // Handle pipe-separated columns (table format)
+    // Handle pipe-separated columns
     if (line.includes("|")) {
-      const parts = line.split("|");
+      const parts = line.split("|").map(p => p.trim());
+      // Get second column (usually the medicine/brand name)
       if (parts.length >= 2) {
-        // Medicine is typically the 2nd column
-        medName = parts[1].trim();
+        medName = parts[1];
+      } else if (parts.length >= 1) {
+        medName = parts[0];
       }
     } else {
-      // Handle space-separated table format
-      // Pattern: 1 Paracetamol 500mg 1-0-1 30 days 60
-      const parts = line.split(/\s+/);
-      if (parts.length >= 2 && /^\d+$/.test(parts[0])) {
-        // Remove the leading number (row number)
-        parts.shift();
-        // Get everything before dosage pattern (1-0-1 format)
-        let remaining = parts.join(" ");
-        const dosageMatch = remaining.match(/\s*(\d+-\d+-\d+)/);
-        if (dosageMatch) {
-          medName = remaining.substring(0, dosageMatch.index).trim();
+      // Handle space-separated or continuous text
+      // Pattern: "1 Paracetamol 500mg 1-0-1 30 days 60"
+      // Or: "Paracetamol 500mg 1-0-1 30 days"
+
+      // Remove leading row number if present
+      medName = line.replace(/^\d+[\.\)]\s*/, "");
+
+      // Extract up to dosage pattern (1-0-1 or similar)
+      const dosageMatch = medName.match(/\s+(\d+-\d+-\d+)/);
+      if (dosageMatch) {
+        medName = medName.substring(0, dosageMatch.index);
+      } else {
+        // Extract up to duration/days pattern
+        const daysMatch = medName.match(/\s+\d+\s+(days?|tabs?|capsules?|ml)/i);
+        if (daysMatch) {
+          medName = medName.substring(0, daysMatch.index);
         } else {
-          medName = parts.join(" ").split(/\s{2,}/)[0];
+          // Take first reasonable part (before 2+ spaces)
+          const parts = medName.split(/\s{2,}/);
+          medName = parts[0];
         }
       }
     }
 
-    // Clean up the medicine name
+    // Clean up: trim and remove extra spaces
     medName = medName.trim();
+    medName = medName.replace(/\s+/g, " ");
 
-    // Validate medicine name (should have letters and be reasonably long)
-    if (medName && medName.length >= 2 && /[a-zA-Z]/.test(medName)) {
-      medicines.push(medName);
-      console.log("Extracted medicine: " + medName);
+    // Validate: must have letters and be at least 2 characters
+    if (medName && medName.length >= 3 && /[a-zA-Z]/.test(medName)) {
+      // Additional check: should not be a number-only line
+      if (!/^\d+$/.test(medName)) {
+        brandStrengthValues.push(medName);
+        console.log("Extracted: " + medName);
+      }
     }
   }
 
-  return medicines;
+  console.log("\nTotal Brand & Strength values extracted: " + brandStrengthValues.length);
+  console.log("=".repeat(80) + "\n");
+
+  return brandStrengthValues;
 }
 
 /**
@@ -207,39 +228,44 @@ exports.extractMedicines = async (req, res) => {
       });
     }
 
-    // Extract medicines from prescription table
-    console.log("STEP 1: Extracting medicines from prescription table...");
-    const extractedMedicines = extractMedicinesFromPrescription(pdfText);
-    console.log("Total extracted: " + extractedMedicines.length + " medicines\n");
+    // Extract Brand & Strength values from prescription
+    const brandStrengthValues = extractBrandStrengthValues(pdfText);
 
-    if (extractedMedicines.length === 0) {
+    if (brandStrengthValues.length === 0) {
+      console.log("WARNING: No Brand & Strength values found in prescription");
       if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
       return res.json({
         success: false,
-        message: "No medicines found in prescription",
+        message: "No medicines found in Brand & Strength column",
+        brandStrength: [],
+        extractedCount: 0,
         matchedCount: 0,
+        unmatchedCount: 0,
         medicines: [],
-        extractedMedicines: [],
       });
     }
+
+    // Log extracted Brand & Strength
+    console.log("STEP 1: Extracted " + brandStrengthValues.length + " Brand & Strength values\n");
 
     // Load all medicines from database
     console.log("STEP 2: Loading medicines from database...");
     const dbMedicines = await Medicine.find({}).lean();
     console.log("Total in database: " + dbMedicines.length + " medicines\n");
 
-    // Match extracted medicines with database
-    console.log("STEP 3: Matching extracted medicines with database...");
+    // Match Brand & Strength values with database medicines
+    console.log("STEP 3: Matching Brand & Strength values with database...");
     console.log("-".repeat(80));
 
     const matchedMedicines = [];
     const unmatchedMedicines = [];
 
-    for (const extractedName of extractedMedicines) {
-      console.log("");
-      const dbMedicine = findMatchInDatabase(extractedName, dbMedicines);
+    for (const brandStrength of brandStrengthValues) {
+      console.log("Checking: " + brandStrength);
+      const dbMedicine = findMatchInDatabase(brandStrength, dbMedicines);
 
       if (dbMedicine) {
+        console.log("  MATCHED: " + dbMedicine.description);
         matchedMedicines.push({
           medicineId: dbMedicine._id.toString(),
           name: dbMedicine.description,
@@ -257,8 +283,9 @@ exports.extractMedicines = async (req, res) => {
           hsnCode: dbMedicine.hsnCode || "",
         });
       } else {
+        console.log("  NO MATCH");
         unmatchedMedicines.push({
-          name: extractedName,
+          name: brandStrength,
         });
       }
     }
@@ -269,7 +296,7 @@ exports.extractMedicines = async (req, res) => {
     console.log("Unmatched: " + unmatchedMedicines.length);
 
     if (unmatchedMedicines.length > 0) {
-      console.log("\nUnmatched medicines:");
+      console.log("\nUnmatched Brand & Strength values:");
       unmatchedMedicines.forEach((med, i) => {
         console.log("  " + (i + 1) + ". " + med.name);
       });
@@ -281,20 +308,18 @@ exports.extractMedicines = async (req, res) => {
     }
 
     console.log("\n" + "=".repeat(80));
-    console.log("EXTRACTED MEDICINES FROM PRESCRIPTION:");
+    console.log("FINAL: BRAND & STRENGTH VALUES EXTRACTED");
     console.log("=".repeat(80));
-    extractedMedicines.forEach((med, i) => {
-      console.log((i + 1) + ". " + med);
+    brandStrengthValues.forEach((val, i) => {
+      console.log((i + 1) + ". " + val);
     });
     console.log("=".repeat(80) + "\n");
 
     return res.json({
-      success: matchedMedicines.length > 0,
-      message: matchedMedicines.length > 0
-        ? "Found " + matchedMedicines.length + " matching medicine(s) in inventory"
-        : "Medicines extracted, no matches found in database",
-      extractedMedicines: extractedMedicines,
-      extractedCount: extractedMedicines.length,
+      success: true,
+      message: "Brand & Strength extracted successfully",
+      brandStrength: brandStrengthValues,
+      extractedCount: brandStrengthValues.length,
       matchedCount: matchedMedicines.length,
       unmatchedCount: unmatchedMedicines.length,
       medicines: matchedMedicines,
@@ -314,9 +339,12 @@ exports.extractMedicines = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: error.message || "Server error processing prescription",
+      brandStrength: [],
+      extractedCount: 0,
       matchedCount: 0,
+      unmatchedCount: 0,
       medicines: [],
-      extractedMedicines: [],
+      unmatchedMedicines: [],
     });
   }
 };
