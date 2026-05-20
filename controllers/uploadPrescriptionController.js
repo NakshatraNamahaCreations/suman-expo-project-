@@ -295,18 +295,8 @@ exports.extractMedicines = async (req, res) => {
 
               return res.json({
                 success: false,
-                message: "Could not extract text from prescription. All OCR methods failed. Please use a text-based PDF or contact support.",
+                message: "Could not extract text from PDF. All OCR methods failed. Please try a text-based PDF.",
                 extractedText: "",
-                brandStrength: [],
-                extractedCount: 0,
-                matchedCount: 0,
-                unmatchedCount: 0,
-                medicines: [],
-                unmatchedMedicines: [],
-                debugInfo: {
-                  ocrErrors: ocrErrors,
-                  altOcrError: altOcrErr.message,
-                },
               });
             }
           }
@@ -414,14 +404,8 @@ exports.extractMedicines = async (req, res) => {
 
     return res.json({
       success: true,
-      message: "Brand & Strength extracted successfully",
+      message: "PDF text extracted successfully",
       extractedText: pdfText,
-      brandStrength: brandStrengthValues,
-      extractedCount: brandStrengthValues.length,
-      matchedCount: matchedMedicines.length,
-      unmatchedCount: unmatchedMedicines.length,
-      medicines: matchedMedicines,
-      unmatchedMedicines: unmatchedMedicines,
     });
 
   } catch (error) {
