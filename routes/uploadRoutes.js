@@ -3,6 +3,7 @@ const multer = require("multer");
 const path = require("path");
 
 const uploadController = require("../controllers/uploadPrescriptionController");
+const diagnosticController = require("../controllers/diagnosticController");
 
 const storage = multer.diskStorage({
   destination: "uploads/",
@@ -59,6 +60,14 @@ router.post(
   upload.single("file"),
   logUpload,
   uploadController.extractMedicines
+);
+
+// Diagnostic endpoint to test OCR methods
+router.post(
+  "/test-ocr",
+  upload.single("file"),
+  logUpload,
+  diagnosticController.testOCRMethods
 );
 
 module.exports = router;

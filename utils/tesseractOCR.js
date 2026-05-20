@@ -20,61 +20,53 @@ const extractTextWithTesseract = async (filePath) => {
     console.log("File size: " + fileSizeBytes + " bytes (" + fileSizeMB + " MB)");
     console.log("Using local Tesseract.js for OCR (no external API)...");
 
+    const fileBuffer = fs.readFileSync(filePath);
+    const base64Data = fileBuffer.toString("base64");
     const isPDF = filePath.toLowerCase().endsWith(".pdf");
 
-    if (isPDF) {
-      console.log("PDF detected - extracting first page for OCR...");
-      const imageData = fs.readFileSync(filePath);
-      const base64Image = imageData.toString("base64");
-      const dataUrl = "data:application/pdf;base64," + base64Image;
+    // Determine MIME type
+    let mimeType = "image/png";
+    const ext = path.extname(filePath).toLowerCase();
 
-      console.log("Starting Tesseract OCR worker on PDF...");
-      const result = await Tesseract.recognize(dataUrl, "eng", {
-        logger: (m) => {
-          if (m.status === "recognizing text") {
-            console.log("  OCR Progress: " + Math.round(m.progress * 100) + "%");
-          }
-        },
-      });
-
-      const extractedText = result.data.text;
-      if (!extractedText || extractedText.trim().length === 0) {
-        throw new Error("Tesseract returned empty text from PDF");
-      }
-
-      console.log("\n✅ TESSERACT OCR SUCCESSFUL!");
-      console.log("Extracted text length: " + extractedText.length + " characters");
-      return extractedText;
-    } else {
-      const imageData = fs.readFileSync(filePath);
-      const base64Image = imageData.toString("base64");
-      const dataUrl = "data:image/png;base64," + base64Image;
-
-      console.log("Starting Tesseract OCR worker...");
-
-      const result = await Tesseract.recognize(dataUrl, "eng", {
-        logger: (m) => {
-          if (m.status === "recognizing text") {
-            console.log("  OCR Progress: " + Math.round(m.progress * 100) + "%");
-          }
-        },
-      });
-
-      const extractedText = result.data.text;
-
-      if (!extractedText || extractedText.trim().length === 0) {
-        throw new Error("Tesseract returned empty text");
-      }
-
-      console.log("\n✅ TESSERACT OCR SUCCESSFUL!");
-      console.log("Extracted text length: " + extractedText.length + " characters");
-      return extractedText;
+    if (ext === ".jpg" || ext === ".jpeg") {
+      mimeType = "image/jpeg";
+    } else if (ext === ".png") {
+      mimeType = "image/png";
+    } else if (ext === ".gif") {
+      mimeType = "image/gif";
+    } else if (isPDF) {
+      mimeType = "application/pdf";
     }
+
+    console.log("Detected file type: " + mimeType);
+    console.log("Starting Tesseract OCR worker...");
+
+    const dataUrl = "data:" + mimeType + ";base64," + base64Data;
+
+    const result = await Tesseract.recognize(dataUrl, "eng", {
+      logger: (m) => {
+        if (m.status === "recognizing text") {
+          console.log("  OCR Progress: " + Math.round(m.progress * 100) + "%");
+        }
+      },
+    });
+
+    const extractedText = (result.data.text || "").trim();
+
+    if (!extractedText || extractedText.length === 0) {
+      throw new Error("Tesseract returned empty text - file may be unreadable or contains no text");
+    }
+
+    console.log("\n✅ TESSERACT OCR SUCCESSFUL!");
+    console.log("Extracted text length: " + extractedText.length + " characters\n");
+
+    return extractedText;
 
   } catch (error) {
     console.error("\n❌ TESSERACT OCR FAILED");
     console.error("=".repeat(80));
     console.error("Error: " + error.message);
+    console.error("Stack: " + error.stack?.substring(0, 300));
     console.error("=".repeat(80) + "\n");
     throw error;
   }

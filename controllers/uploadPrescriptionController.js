@@ -196,17 +196,61 @@ exports.extractMedicines = async (req, res) => {
     console.log("Extracting text from PDF...");
     console.log("File path: " + filePath);
     console.log("File exists: " + fs.existsSync(filePath));
-    if (fs.existsSync(filePath)) {
-      console.log("File size: " + fs.statSync(filePath).size + " bytes");
+
+    if (!fs.existsSync(filePath)) {
+      if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      return res.json({
+        success: false,
+        message: "PDF file not found on server. Please try uploading again.",
+        brandStrength: [],
+        extractedCount: 0,
+        matchedCount: 0,
+        unmatchedCount: 0,
+        medicines: [],
+        unmatchedMedicines: [],
+      });
+    }
+
+    const fileStats = fs.statSync(filePath);
+    console.log("File size: " + fileStats.size + " bytes");
+
+    if (fileStats.size === 0) {
+      if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      return res.json({
+        success: false,
+        message: "PDF file is empty. Please upload a valid prescription PDF.",
+        brandStrength: [],
+        extractedCount: 0,
+        matchedCount: 0,
+        unmatchedCount: 0,
+        medicines: [],
+        unmatchedMedicines: [],
+      });
+    }
+
+    if (fileStats.size > 50 * 1024 * 1024) {
+      if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      return res.json({
+        success: false,
+        message: "PDF file is too large (max 50MB). Please upload a smaller file.",
+        brandStrength: [],
+        extractedCount: 0,
+        matchedCount: 0,
+        unmatchedCount: 0,
+        medicines: [],
+        unmatchedMedicines: [],
+      });
     }
 
     let pdfText = "";
+    const ocrErrors = {};
 
     try {
       pdfText = await extractTextFromPDF(filePath);
       console.log("✅ PDF text extracted using pdf-parse: " + pdfText.length + " characters\n");
     } catch (pdfErr) {
-      console.log("PDF text extraction failed: " + pdfErr.message);
+      console.log("⚠️ PDF text extraction failed: " + pdfErr.message);
+      ocrErrors.pdfParse = pdfErr.message;
       console.log("Attempting Google Cloud Vision OCR for scanned PDF...\n");
 
       try {
@@ -214,6 +258,7 @@ exports.extractMedicines = async (req, res) => {
         console.log("✅ Google Cloud Vision OCR extraction successful: " + pdfText.length + " characters\n");
       } catch (googleErr) {
         console.error("\n⚠️ Google Cloud Vision OCR failed: " + googleErr.message);
+        ocrErrors.googleVision = googleErr.message;
         console.log("Attempting Tesseract.js OCR extraction...\n");
 
         try {
@@ -221,6 +266,7 @@ exports.extractMedicines = async (req, res) => {
           console.log("✅ Tesseract.js OCR extraction successful: " + pdfText.length + " characters\n");
         } catch (tesseractErr) {
           console.error("\n⚠️ Tesseract.js OCR failed: " + tesseractErr.message);
+          ocrErrors.tesseract = tesseractErr.message;
           console.log("Attempting OCR.space API extraction...\n");
 
           try {
@@ -228,6 +274,7 @@ exports.extractMedicines = async (req, res) => {
             console.log("✅ OCR.space API extraction successful: " + pdfText.length + " characters\n");
           } catch (ocrErr) {
             console.error("\n⚠️ OCR.space API failed: " + ocrErr.message);
+            ocrErrors.ocrSpace = ocrErr.message;
             console.log("Attempting fallback to alternative OCR service...\n");
 
             try {
@@ -236,10 +283,12 @@ exports.extractMedicines = async (req, res) => {
             } catch (altOcrErr) {
               console.error("\n❌ ALL OCR METHODS FAILED");
               console.error("=".repeat(80));
-              console.error("Google Vision Error: " + googleErr.message);
-              console.error("Tesseract.js Error: " + tesseractErr.message);
-              console.error("OCR.space API Error: " + ocrErr.message);
-              console.error("Alternative OCR Error: " + altOcrErr.message);
+              console.error("OCR Error Summary:");
+              console.error("  1. pdf-parse: " + (ocrErrors.pdfParse || "N/A"));
+              console.error("  2. Google Vision: " + (ocrErrors.googleVision || "N/A"));
+              console.error("  3. Tesseract.js: " + (ocrErrors.tesseract || "N/A"));
+              console.error("  4. OCR.space: " + (ocrErrors.ocrSpace || "N/A"));
+              console.error("  5. Alternative OCR: " + altOcrErr.message);
               console.error("=".repeat(80));
 
               if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
@@ -253,6 +302,10 @@ exports.extractMedicines = async (req, res) => {
                 unmatchedCount: 0,
                 medicines: [],
                 unmatchedMedicines: [],
+                debugInfo: {
+                  ocrErrors: ocrErrors,
+                  altOcrError: altOcrErr.message,
+                },
               });
             }
           }
