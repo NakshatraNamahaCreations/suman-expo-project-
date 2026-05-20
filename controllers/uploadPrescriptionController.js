@@ -202,17 +202,23 @@ exports.extractMedicines = async (req, res) => {
 
       try {
         pdfText = await extractTextFromImagePDF(filePath);
-        console.log("OCR text extracted: " + pdfText.length + " characters\n");
+        console.log("✅ OCR text extracted: " + pdfText.length + " characters\n");
       } catch (ocrErr) {
-        console.error("OCR extraction also failed: " + ocrErr.message);
+        console.error("\n❌ OCR EXTRACTION FAILED IN CONTROLLER");
+        console.error("Error: " + ocrErr.message);
+        console.error("Stack: " + ocrErr.stack);
+
         if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
 
         return res.json({
           success: false,
-          message: "Could not read PDF. Neither text extraction nor OCR succeeded. Please ensure the PDF is clear and readable.",
+          message: "OCR extraction failed. " + ocrErr.message,
+          brandStrength: [],
+          extractedCount: 0,
           matchedCount: 0,
+          unmatchedCount: 0,
           medicines: [],
-          extractedMedicines: [],
+          unmatchedMedicines: [],
         });
       }
     }
