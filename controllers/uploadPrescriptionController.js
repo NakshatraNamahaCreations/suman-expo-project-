@@ -2,6 +2,7 @@ const fs = require("fs");
 const Medicine = require("../models/Medicine");
 const extractTextFromPDF = require("../utils/simplePdfReader");
 const extractTextFromImagePDF = require("../utils/ocrExtractor");
+const extractTextWithTesseract = require("../utils/tesseractOCR");
 
 /**
  * Normalize text for matching
@@ -202,24 +203,32 @@ exports.extractMedicines = async (req, res) => {
 
       try {
         pdfText = await extractTextFromImagePDF(filePath);
-        console.log("✅ OCR text extracted: " + pdfText.length + " characters\n");
+        console.log("✅ OCR.space API extraction successful: " + pdfText.length + " characters\n");
       } catch (ocrErr) {
-        console.error("\n❌ OCR EXTRACTION FAILED IN CONTROLLER");
-        console.error("Error: " + ocrErr.message);
-        console.error("Stack: " + ocrErr.stack);
+        console.error("\n⚠️ OCR.space API failed: " + ocrErr.message);
+        console.log("Attempting fallback to local Tesseract.js OCR...\n");
 
-        if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        try {
+          pdfText = await extractTextWithTesseract(filePath);
+          console.log("✅ Tesseract fallback extraction successful: " + pdfText.length + " characters\n");
+        } catch (tesseractErr) {
+          console.error("\n❌ BOTH OCR METHODS FAILED");
+          console.error("OCR.space Error: " + ocrErr.message);
+          console.error("Tesseract Error: " + tesseractErr.message);
 
-        return res.json({
-          success: false,
-          message: "OCR extraction failed. " + ocrErr.message,
-          brandStrength: [],
-          extractedCount: 0,
-          matchedCount: 0,
-          unmatchedCount: 0,
-          medicines: [],
-          unmatchedMedicines: [],
-        });
+          if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+
+          return res.json({
+            success: false,
+            message: "Could not extract text. OCR.space failed (" + ocrErr.message + "), Tesseract failed (" + tesseractErr.message + ")",
+            brandStrength: [],
+            extractedCount: 0,
+            matchedCount: 0,
+            unmatchedCount: 0,
+            medicines: [],
+            unmatchedMedicines: [],
+          });
+        }
       }
     }
 
