@@ -1,6 +1,8 @@
 const fs = require("fs");
 const Medicine = require("../models/Medicine");
 const extractTextFromPDF = require("../utils/simplePdfReader");
+const extractTextWithGoogleVision = require("../utils/googleVisionOCR");
+const extractTextWithTesseract = require("../utils/tesseractOCR");
 const extractTextFromImagePDF = require("../utils/ocrExtractor");
 const extractTextWithAlternativeOCR = require("../utils/alternativeOCR");
 
@@ -205,50 +207,55 @@ exports.extractMedicines = async (req, res) => {
       console.log("✅ PDF text extracted using pdf-parse: " + pdfText.length + " characters\n");
     } catch (pdfErr) {
       console.log("PDF text extraction failed: " + pdfErr.message);
-      console.log("Attempting OCR extraction for scanned PDF...\n");
+      console.log("Attempting Google Cloud Vision OCR for scanned PDF...\n");
 
       try {
-        pdfText = await extractTextFromImagePDF(filePath);
-        console.log("✅ OCR.space API extraction successful: " + pdfText.length + " characters\n");
-      } catch (ocrErr) {
-        console.error("\n⚠️ OCR.space API failed: " + ocrErr.message);
-        console.log("Attempting fallback to alternative OCR service...\n");
+        pdfText = await extractTextWithGoogleVision(filePath);
+        console.log("✅ Google Cloud Vision OCR extraction successful: " + pdfText.length + " characters\n");
+      } catch (googleErr) {
+        console.error("\n⚠️ Google Cloud Vision OCR failed: " + googleErr.message);
+        console.log("Attempting Tesseract.js OCR extraction...\n");
 
         try {
-          pdfText = await extractTextWithAlternativeOCR(filePath);
-          console.log("✅ Alternative OCR extraction successful: " + pdfText.length + " characters\n");
-        } catch (altOcrErr) {
-          console.error("\n❌ ALL OCR METHODS FAILED");
-          console.error("=".repeat(80));
-          console.error("Primary OCR (OCR.space) Error: " + ocrErr.message);
-          console.error("Fallback OCR (free-online-ocr) Error: " + altOcrErr.message);
-          console.error("=".repeat(80));
+          pdfText = await extractTextWithTesseract(filePath);
+          console.log("✅ Tesseract.js OCR extraction successful: " + pdfText.length + " characters\n");
+        } catch (tesseractErr) {
+          console.error("\n⚠️ Tesseract.js OCR failed: " + tesseractErr.message);
+          console.log("Attempting OCR.space API extraction...\n");
 
-          // Log detailed error info for debugging
-          if (ocrErr.response) {
-            console.error("\nOCR.space Response Details:");
-            console.error("  Status: " + ocrErr.response.status);
-            console.error("  Data: " + JSON.stringify(ocrErr.response.data).substring(0, 200));
+          try {
+            pdfText = await extractTextFromImagePDF(filePath);
+            console.log("✅ OCR.space API extraction successful: " + pdfText.length + " characters\n");
+          } catch (ocrErr) {
+            console.error("\n⚠️ OCR.space API failed: " + ocrErr.message);
+            console.log("Attempting fallback to alternative OCR service...\n");
+
+            try {
+              pdfText = await extractTextWithAlternativeOCR(filePath);
+              console.log("✅ Alternative OCR extraction successful: " + pdfText.length + " characters\n");
+            } catch (altOcrErr) {
+              console.error("\n❌ ALL OCR METHODS FAILED");
+              console.error("=".repeat(80));
+              console.error("Google Vision Error: " + googleErr.message);
+              console.error("Tesseract.js Error: " + tesseractErr.message);
+              console.error("OCR.space API Error: " + ocrErr.message);
+              console.error("Alternative OCR Error: " + altOcrErr.message);
+              console.error("=".repeat(80));
+
+              if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+
+              return res.json({
+                success: false,
+                message: "Could not extract text from prescription. All OCR methods failed. Please use a text-based PDF or contact support.",
+                brandStrength: [],
+                extractedCount: 0,
+                matchedCount: 0,
+                unmatchedCount: 0,
+                medicines: [],
+                unmatchedMedicines: [],
+              });
+            }
           }
-
-          if (altOcrErr.response) {
-            console.error("\nAlternative OCR Response Details:");
-            console.error("  Status: " + altOcrErr.response.status);
-            console.error("  Data: " + JSON.stringify(altOcrErr.response.data).substring(0, 200));
-          }
-
-          if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
-
-          return res.json({
-            success: false,
-            message: "Could not extract text from prescription. OCR services unavailable or PDF is unreadable. Error: " + ocrErr.message,
-            brandStrength: [],
-            extractedCount: 0,
-            matchedCount: 0,
-            unmatchedCount: 0,
-            medicines: [],
-            unmatchedMedicines: [],
-          });
         }
       }
     }
