@@ -192,11 +192,17 @@ exports.extractMedicines = async (req, res) => {
 
     // Extract text from PDF
     console.log("Extracting text from PDF...");
+    console.log("File path: " + filePath);
+    console.log("File exists: " + fs.existsSync(filePath));
+    if (fs.existsSync(filePath)) {
+      console.log("File size: " + fs.statSync(filePath).size + " bytes");
+    }
+
     let pdfText = "";
 
     try {
       pdfText = await extractTextFromPDF(filePath);
-      console.log("PDF text extracted using pdf-parse: " + pdfText.length + " characters\n");
+      console.log("✅ PDF text extracted using pdf-parse: " + pdfText.length + " characters\n");
     } catch (pdfErr) {
       console.log("PDF text extraction failed: " + pdfErr.message);
       console.log("Attempting OCR extraction for scanned PDF...\n");
@@ -213,14 +219,29 @@ exports.extractMedicines = async (req, res) => {
           console.log("✅ Alternative OCR extraction successful: " + pdfText.length + " characters\n");
         } catch (altOcrErr) {
           console.error("\n❌ ALL OCR METHODS FAILED");
+          console.error("=".repeat(80));
           console.error("Primary OCR (OCR.space) Error: " + ocrErr.message);
-          console.error("Fallback OCR Error: " + altOcrErr.message);
+          console.error("Fallback OCR (free-online-ocr) Error: " + altOcrErr.message);
+          console.error("=".repeat(80));
+
+          // Log detailed error info for debugging
+          if (ocrErr.response) {
+            console.error("\nOCR.space Response Details:");
+            console.error("  Status: " + ocrErr.response.status);
+            console.error("  Data: " + JSON.stringify(ocrErr.response.data).substring(0, 200));
+          }
+
+          if (altOcrErr.response) {
+            console.error("\nAlternative OCR Response Details:");
+            console.error("  Status: " + altOcrErr.response.status);
+            console.error("  Data: " + JSON.stringify(altOcrErr.response.data).substring(0, 200));
+          }
 
           if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
 
           return res.json({
             success: false,
-            message: "Could not extract text from prescription. Both OCR services failed. Please ensure the PDF is clear and readable.",
+            message: "Could not extract text from prescription. OCR services unavailable or PDF is unreadable. Error: " + ocrErr.message,
             brandStrength: [],
             extractedCount: 0,
             matchedCount: 0,
