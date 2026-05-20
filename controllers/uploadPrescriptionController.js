@@ -1,6 +1,7 @@
 const fs = require("fs");
 const Medicine = require("../models/Medicine");
 const extractTextFromPDF = require("../utils/simplePdfReader");
+const extractTextFromImagePDF = require("../utils/ocrExtractor");
 
 /**
  * Normalize text for matching
@@ -173,17 +174,26 @@ exports.extractMedicines = async (req, res) => {
 
     try {
       pdfText = await extractTextFromPDF(filePath);
-      console.log("PDF text extracted: " + pdfText.length + " characters\n");
+      console.log("PDF text extracted using pdf-parse: " + pdfText.length + " characters\n");
     } catch (pdfErr) {
-      console.log("PDF extraction error: " + pdfErr.message);
-      if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      console.log("PDF text extraction failed: " + pdfErr.message);
+      console.log("Attempting OCR extraction for scanned PDF...\n");
 
-      return res.json({
-        success: false,
-        message: "Could not read PDF. Please ensure it's a text-based PDF (not scanned/image-based).",
-        matchedCount: 0,
-        medicines: [],
-      });
+      try {
+        pdfText = await extractTextFromImagePDF(filePath);
+        console.log("OCR text extracted: " + pdfText.length + " characters\n");
+      } catch (ocrErr) {
+        console.error("OCR extraction also failed: " + ocrErr.message);
+        if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+
+        return res.json({
+          success: false,
+          message: "Could not read PDF. Neither text extraction nor OCR succeeded. Please ensure the PDF is clear and readable.",
+          matchedCount: 0,
+          medicines: [],
+          extractedMedicines: [],
+        });
+      }
     }
 
     if (!pdfText || pdfText.trim().length === 0) {
@@ -193,6 +203,7 @@ exports.extractMedicines = async (req, res) => {
         message: "PDF is empty or unreadable",
         matchedCount: 0,
         medicines: [],
+        extractedMedicines: [],
       });
     }
 
