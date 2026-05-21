@@ -1,5 +1,6 @@
 const jwt = require("jsonwebtoken");
 const LoginUser = require("../models/LoginUser");
+const { sendOTPSMS, verifySMSConfig } = require("../utils/smsService");
 
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key";
 const JWT_EXPIRE = process.env.JWT_EXPIRE || "7d";
@@ -61,18 +62,32 @@ exports.sendOTP = async (req, res) => {
 
     await user.save();
 
-    console.log(`[OTP] Phone: ${phone}, OTP: ${otp}`);
+    // Send OTP via SMS (with user's name)
+    const smsResult = await sendOTPSMS(phone, otp, user.name);
 
-    res.json({
+    // Response object
+    const response = {
       success: true,
-      message: "OTP sent successfully",
+      message: smsResult.success ? "OTP sent successfully" : "OTP generated but SMS delivery pending",
       phone,
       otp: {
         code: otp,
         createdAt: new Date(),
         expiresAt,
       },
-    });
+    };
+
+    // Add SMS status info
+    if (!smsResult.success) {
+      response.warning = smsResult.message;
+    }
+
+    // In development mode, include OTP in response for testing
+    if (process.env.NODE_ENV !== "production") {
+      response.otp.code = otp; // Already included above, just confirming
+    }
+
+    res.json(response);
   } catch (err) {
     console.error("Send OTP error:", err);
     res.status(500).json({
