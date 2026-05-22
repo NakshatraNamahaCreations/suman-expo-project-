@@ -97,17 +97,17 @@ exports.getDashboardSummary = async (req, res) => {
           $facet: {
             total: [{ $count: "count" }],
             active: [{ $match: { status: "Active" } }, { $count: "count" }],
-            outOfStock: [{ $match: { stock: 0 } }, { $count: "count" }],
+            outOfStock: [{ $match: { qty: 0 } }, { $count: "count" }],
             critical: [
-              { $match: { $expr: { $and: [{ $gt: ["$stock", 0] }, { $lte: ["$stock", { $multiply: ["$minStock", 0.5] }] }] } } },
+              { $match: { $expr: { $and: [{ $gt: ["$qty", 0] }, { $lte: ["$qty", 10] } ] } } },
               { $count: "count" },
             ],
             lowStock: [
-              { $match: { $expr: { $and: [{ $gt: ["$stock", { $multiply: ["$minStock", 0.5] }] }, { $lte: ["$stock", "$minStock"] }] } } },
+              { $match: { $expr: { $and: [{ $gt: ["$qty", 10] }, { $lte: ["$qty", 50] } ] } } },
               { $count: "count" },
             ],
             inStock: [
-              { $match: { $expr: { $gt: ["$stock", "$minStock"] } } },
+              { $match: { $expr: { $gt: ["$qty", 50] } } },
               { $count: "count" },
             ],
           },
@@ -115,16 +115,16 @@ exports.getDashboardSummary = async (req, res) => {
       ]),
 
       // ── EXPIRY ITEMS ──
-      Medicine.find({ expiry: { $exists: true, $ne: null } })
-        .select("name expiry stock")
-        .sort({ expiry: 1 })
+      Medicine.find({ expDate: { $exists: true, $ne: "" } })
+        .select("description expDate qty")
+        .sort({ expDate: 1 })
         .limit(20)
         .lean(),
 
       // ── TOP MEDS ──
-      Medicine.find({ demand30: { $gt: 0 } })
-        .select("name demand30 demand90 stock price")
-        .sort({ demand30: -1 })
+      Medicine.find({ status: "Active", qty: { $gt: 0 } })
+        .select("description qty newMrp")
+        .sort({ qty: -1 })
         .limit(5)
         .lean(),
 
@@ -156,6 +156,7 @@ exports.getDashboardSummary = async (req, res) => {
     const ordByPay = {};
     ordData.byPayment.forEach((s) => { ordByPay[s._id] = s.count; });
     const totalOrders = Object.values(ordByStatus).reduce((a, b) => a + b, 0);
+    const todaysOrders = ordData.today[0]?.count || 0;
 
     /* ── Revenue ── */
     const revData = revenueAggs[0];
@@ -164,6 +165,10 @@ exports.getDashboardSummary = async (req, res) => {
     /* ── Inventory ── */
     const inv = inventoryAgg[0];
     const totalSKUs = inv.total[0]?.count || 0;
+    const criticalStock = inv.critical[0]?.count || 0;
+    const lowStock = inv.lowStock[0]?.count || 0;
+    const outOfStock = inv.outOfStock[0]?.count || 0;
+    const inStockCount = inv.inStock[0]?.count || 0;
 
     /* ── FINAL RESPONSE ── */
     res.json({
@@ -180,6 +185,7 @@ exports.getDashboardSummary = async (req, res) => {
 
       orders: {
         total: totalOrders,
+        today: todaysOrders,
         pending: ordByStatus["Created"] || 0,
         processing: ordByStatus["Processing"] || 0,
         packed: ordByStatus["Packed"] || 0,
@@ -194,7 +200,23 @@ exports.getDashboardSummary = async (req, res) => {
 
       inventory: {
         totalSKUs,
+        critical: criticalStock,
+        lowStock,
+        outOfStock,
+        inStock: inStockCount,
       },
+
+      topMedicines: topMedsAgg.map(med => ({
+        name: med.description,
+        qty: med.qty,
+        price: med.newMrp,
+      })),
+
+      expiryItems: expiryItems.map(item => ({
+        name: item.description,
+        expiry: item.expDate,
+        qty: item.qty,
+      })),
     });
 
   } catch (err) {

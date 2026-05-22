@@ -17,9 +17,9 @@ const orderRoutes = require("./routes/orderRoutes");
 const authRoutes = require("./routes/authRoutes");
 const authLoginRoutes = require("./routes/authLoginRoutes");
 
-const uploadRoutes = require("./routes/uploadRoutes");
 const ticketRoutes = require("./routes/ticketRoutes");
 const teamMemberRoutes = require("./routes/teamMemberRoutes");
+const uploadRoutes = require("./routes/uploadRoutes");
 
 
 const helmet = require("helmet");
@@ -55,8 +55,8 @@ app.use(
 );
 
 // Body parsing with size limit
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
 // Note: express-mongo-sanitize removed — incompatible with Express 5 read-only req.query
 
@@ -78,9 +78,9 @@ app.use("/api/patient-details", patientDetailsRoutes);
 app.use("/api/otp", otpRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/auth-login", authLoginRoutes);
-app.use("/api/upload", uploadRoutes);
 app.use("/api/tickets", ticketRoutes);
 app.use("/api/team-members", teamMemberRoutes);
+app.use("/api/upload", uploadRoutes);
 
 app.get("/", (req, res) => {
   res.send("RG Medlink API Running");
