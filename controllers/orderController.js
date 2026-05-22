@@ -404,6 +404,17 @@ exports.getBillingTable = async (req, res) => {
       Order.countDocuments(queryFilter)
     ]);
 
+    // ✅ Calculate accurate counts for all filtered records (not just current page)
+    const allOrdersForStats = await Order.find(queryFilter).select("invoiceStatus paymentStatus totalAmount").lean();
+    const stats = {
+      generated: allOrdersForStats.filter(o => o.invoiceStatus === "Generated").length,
+      pending: allOrdersForStats.filter(o => o.invoiceStatus === "Pending").length,
+      paid: allOrdersForStats.filter(o => o.paymentStatus === "Paid").length,
+      unpaid: allOrdersForStats.filter(o => o.paymentStatus !== "Paid").length,
+      totalAmount: allOrdersForStats.reduce((sum, o) => sum + (o.totalAmount || 0), 0),
+      paidAmount: allOrdersForStats.filter(o => o.paymentStatus === "Paid").reduce((sum, o) => sum + (o.totalAmount || 0), 0),
+    };
+
     const table = orders.map((o) => ({
       id: o._id,
       orderId: o.orderId || "-",
@@ -425,6 +436,7 @@ exports.getBillingTable = async (req, res) => {
         total,
         totalPages: all ? 1 : Math.ceil(total / limit) || 1,
       },
+      stats,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

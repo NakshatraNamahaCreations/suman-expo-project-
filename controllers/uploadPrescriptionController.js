@@ -3,156 +3,111 @@ const Medicine = require("../models/Medicine");
 const extractTextFromPDF = require("../utils/simplePdfReader");
 const extractTextWithGoogleVision = require("../utils/googleVisionOCR");
 const extractTextWithTesseract = require("../utils/tesseractOCR");
-const extractTextFromImagePDF = require("../utils/ocrExtractor");
-const extractTextWithAlternativeOCR = require("../utils/alternativeOCR");
 
 /**
  * Normalize text for matching
- * - Convert to lowercase
- * - Remove extra spaces
- * - Remove special characters
  */
 function normalizeText(text) {
   return text
     .toLowerCase()
     .trim()
-    .replace(/\s+/g, " ") // Normalize multiple spaces to single space
-    .replace(/[^\w\s]/g, "") // Remove special characters, keep only letters, numbers, spaces
+    .replace(/\s+/g, " ")
+    .replace(/[^\w\s]/g, "")
     .trim();
 }
 
 /**
- * Extract Brand & Strength values from prescription text
- * Looks for the Brand & Strength column and extracts medicine names
+ * Extract medicine names from prescription OCR text
  */
 function extractBrandStrengthValues(text) {
   const lines = text.split("\n");
   const brandStrengthValues = [];
 
   console.log("\n" + "=".repeat(80));
-  console.log("EXTRACTING BRAND & STRENGTH VALUES");
+  console.log("EXTRACTING MEDICINE NAMES");
   console.log("=".repeat(80));
 
-  let startIdx = -1;
-
-  // Find Brand & Strength header or similar
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].toLowerCase();
-    // Look for table headers containing medicine/brand/strength info
-    if ((line.includes("brand") || line.includes("medicine")) &&
-        (line.includes("strength") || line.includes("dosage") || line.includes("duration"))) {
-      startIdx = i;
-      console.log("Found prescription table header at line " + (i + 1));
-      console.log("Header: " + lines[i]);
-      break;
-    }
-  }
-
-  if (startIdx === -1) {
-    console.log("WARNING: Could not find prescription table header");
-    return [];
-  }
-
-  // Extract medicines from lines after header
-  for (let i = startIdx + 1; i < lines.length; i++) {
     let line = lines[i].trim();
 
-    // Stop conditions
-    if (!line || line === "") continue;
-    if (line.match(/^[-_]{3,}/)) continue; // Separator lines
-    if (line.toLowerCase().includes("doctor") || line.toLowerCase().includes("signature")) break;
-    if (line.toLowerCase().includes("medlink") || line.toLowerCase().includes("note")) break;
+    if (!line || line.length < 3) continue;
 
-    // Skip if it looks like a header row
-    if (line.match(/^(No|Sr|Medicine|Brand|Dosage|Duration|Frequency|Quantity|Strength)/i)) continue;
+    if (line.toLowerCase().includes("investigation") ||
+        line.toLowerCase().includes("signature") ||
+        line.toLowerCase().includes("doctor")) break;
+
+    if (line.match(/^[-_]{3,}/) || /^\d+$/.test(line)) continue;
+    if (line.match(/^(No|Sr|Date|Age|Gender|Vitals|Weight|Pulse|BP|Temperature)/i)) continue;
 
     let medName = "";
 
-    // Handle pipe-separated columns
     if (line.includes("|")) {
       const parts = line.split("|").map(p => p.trim());
-      // Get second column (usually the medicine/brand name)
-      if (parts.length >= 2) {
-        medName = parts[1];
-      } else if (parts.length >= 1) {
-        medName = parts[0];
-      }
+      medName = parts.length >= 2 ? parts[1] : parts[0];
     } else {
-      // Handle space-separated or continuous text
-      // Pattern: "1 Paracetamol 500mg 1-0-1 30 days 60"
-      // Or: "Paracetamol 500mg 1-0-1 30 days"
-
-      // Remove leading row number if present
       medName = line.replace(/^\d+[\.\)]\s*/, "");
 
-      // Extract up to dosage pattern (1-0-1 or similar)
-      const dosageMatch = medName.match(/\s+(\d+-\d+-\d+)/);
-      if (dosageMatch) {
-        medName = medName.substring(0, dosageMatch.index);
+      const doseMatch = medName.match(/\s+(\d+-\d+-\d+)/);
+      if (doseMatch) {
+        medName = medName.substring(0, doseMatch.index);
       } else {
-        // Extract up to duration/days pattern
-        const daysMatch = medName.match(/\s+\d+\s+(days?|tabs?|capsules?|ml)/i);
-        if (daysMatch) {
-          medName = medName.substring(0, daysMatch.index);
+        const qtyMatch = medName.match(/\s+(\d+\s*(tablet|capsule|mg|ml|grams?|drops?))/i);
+        if (qtyMatch) {
+          medName = medName.substring(0, qtyMatch.index);
         } else {
-          // Take first reasonable part (before 2+ spaces)
-          const parts = medName.split(/\s{2,}/);
-          medName = parts[0];
+          const durMatch = medName.match(/\s+(\d+\s*(days?|weeks?|months?))/i);
+          if (durMatch) {
+            medName = medName.substring(0, durMatch.index);
+          }
         }
       }
     }
 
-    // Clean up: trim and remove extra spaces
-    medName = medName.trim();
-    medName = medName.replace(/\s+/g, " ");
+    medName = medName.trim().replace(/\s+/g, " ");
 
-    // Validate: must have letters and be at least 2 characters
-    if (medName && medName.length >= 3 && /[a-zA-Z]/.test(medName)) {
-      // Additional check: should not be a number-only line
-      if (!/^\d+$/.test(medName)) {
+    if (medName &&
+        medName.length >= 2 &&
+        /[a-zA-Z]/.test(medName) &&
+        !medName.match(/^(tablet|capsule|cream|syrup|medicine|after|before|food)/i) &&
+        !medName.match(/^\d+$/)) {
+
+      if (!brandStrengthValues.includes(medName)) {
         brandStrengthValues.push(medName);
-        console.log("Extracted: " + medName);
+        console.log("✅ Extracted: " + medName);
       }
     }
   }
 
-  console.log("\nTotal Brand & Strength values extracted: " + brandStrengthValues.length);
+  console.log("\n✅ Total medicines extracted: " + brandStrengthValues.length);
   console.log("=".repeat(80) + "\n");
 
   return brandStrengthValues;
 }
 
 /**
- * Match extracted medicine with database
- * Uses both medicine.description and medicine.normalizedName
+ * Match extracted medicine with database using normalizedName field
  */
 function findMatchInDatabase(extractedName, dbMedicines) {
   const extractedNormalized = normalizeText(extractedName);
 
-  console.log("Searching for: \"" + extractedName + "\"");
-  console.log("Normalized: \"" + extractedNormalized + "\"");
+  console.log("Searching for: \"" + extractedName + "\" → Normalized: \"" + extractedNormalized + "\"");
 
-  // Try to find exact match using normalized names
   for (const dbMed of dbMedicines) {
-    // Match 1: Compare with medicine.normalizedName (if it exists)
-    if (dbMed.normalizedName) {
-      if (dbMed.normalizedName === extractedNormalized) {
-        console.log("MATCH (via normalizedName): " + dbMed.description);
-        return dbMed;
-      }
+    if (dbMed.normalizedName && dbMed.normalizedName === extractedNormalized) {
+      console.log("✅ MATCH: " + dbMed.description);
+      return dbMed;
     }
 
-    // Match 2: Normalize description and compare
     if (dbMed.description) {
       const dbNormalized = normalizeText(dbMed.description);
       if (dbNormalized === extractedNormalized) {
-        console.log("MATCH (via description): " + dbMed.description);
+        console.log("✅ MATCH: " + dbMed.description);
         return dbMed;
       }
     }
   }
 
-  console.log("NO MATCH found");
+  console.log("❌ NO MATCH");
   return null;
 }
 
@@ -161,7 +116,7 @@ exports.extractMedicines = async (req, res) => {
 
   try {
     console.log("\n" + "=".repeat(80));
-    console.log("PDF PRESCRIPTION UPLOAD");
+    console.log("PRESCRIPTION UPLOAD & OCR PROCESSING");
     console.log("=".repeat(80));
 
     if (!req.file) {
@@ -169,7 +124,7 @@ exports.extractMedicines = async (req, res) => {
         success: false,
         message: "No file uploaded",
         matchedCount: 0,
-        medicines: [],
+        matchedMedicines: [],
       });
     }
 
@@ -177,54 +132,48 @@ exports.extractMedicines = async (req, res) => {
     const fileName = req.file.originalname;
     const mimeType = req.file.mimetype;
 
-    console.log("File: " + fileName);
-    console.log("MIME Type: " + mimeType);
+    console.log("📄 File: " + fileName);
+    console.log("📝 MIME Type: " + mimeType);
 
     const isPDF = mimeType.includes("pdf") || fileName.toLowerCase().endsWith(".pdf");
+    const isImage = mimeType.includes("image") || [".jpg", ".jpeg", ".png", ".webp"].some(ext => fileName.toLowerCase().endsWith(ext));
 
-    if (!isPDF) {
+    if (!isPDF && !isImage) {
       if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
       return res.json({
         success: false,
-        message: "Only PDF files are supported. Please upload a prescription PDF.",
+        message: "Invalid file type. Please upload PDF, JPG, PNG, or WEBP.",
         matchedCount: 0,
-        medicines: [],
+        matchedMedicines: [],
       });
     }
 
-    // Extract text from PDF
-    console.log("Extracting text from PDF...");
-    console.log("File path: " + filePath);
-    console.log("File exists: " + fs.existsSync(filePath));
+    console.log("📋 File Type: " + (isPDF ? "PDF" : "Image"));
+
+    // Validate file
+    console.log("🔍 Validating file...");
 
     if (!fs.existsSync(filePath)) {
       if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
       return res.json({
         success: false,
-        message: "PDF file not found on server. Please try uploading again.",
-        brandStrength: [],
-        extractedCount: 0,
+        message: "File not found. Please try uploading again.",
         matchedCount: 0,
-        unmatchedCount: 0,
-        medicines: [],
-        unmatchedMedicines: [],
+        matchedMedicines: [],
       });
     }
 
     const fileStats = fs.statSync(filePath);
-    console.log("File size: " + fileStats.size + " bytes");
+    const fileSizeMB = (fileStats.size / (1024 * 1024)).toFixed(2);
+    console.log("📊 File size: " + fileSizeMB + " MB");
 
     if (fileStats.size === 0) {
       if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
       return res.json({
         success: false,
-        message: "PDF file is empty. Please upload a valid prescription PDF.",
-        brandStrength: [],
-        extractedCount: 0,
+        message: "File is empty. Please upload a valid prescription.",
         matchedCount: 0,
-        unmatchedCount: 0,
-        medicines: [],
-        unmatchedMedicines: [],
+        matchedMedicines: [],
       });
     }
 
@@ -232,162 +181,158 @@ exports.extractMedicines = async (req, res) => {
       if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
       return res.json({
         success: false,
-        message: "PDF file is too large (max 50MB). Please upload a smaller file.",
-        brandStrength: [],
-        extractedCount: 0,
+        message: "File is too large (max 50MB).",
         matchedCount: 0,
-        unmatchedCount: 0,
-        medicines: [],
-        unmatchedMedicines: [],
+        matchedMedicines: [],
       });
     }
 
-    let pdfText = "";
+    // Extract text from prescription
+    console.log("📖 Extracting text from prescription...");
+    let extractedText = "";
     const ocrErrors = {};
 
-    try {
-      pdfText = await extractTextFromPDF(filePath);
-      console.log("✅ PDF text extracted using pdf-parse: " + pdfText.length + " characters\n");
-    } catch (pdfErr) {
-      console.log("⚠️ PDF text extraction failed: " + pdfErr.message);
-      ocrErrors.pdfParse = pdfErr.message;
-      console.log("Attempting Google Cloud Vision OCR for scanned PDF...\n");
-
+    if (isImage) {
+      console.log("🖼️  Processing image with Google Cloud Vision...");
       try {
-        pdfText = await extractTextWithGoogleVision(filePath);
-        console.log("✅ Google Cloud Vision OCR extraction successful: " + pdfText.length + " characters\n");
+        extractedText = await extractTextWithGoogleVision(filePath);
+        console.log("✅ Google Vision extraction successful: " + extractedText.length + " characters");
       } catch (googleErr) {
-        console.error("\n⚠️ Google Cloud Vision OCR failed: " + googleErr.message);
+        console.error("⚠️  Google Vision failed: " + googleErr.message);
         ocrErrors.googleVision = googleErr.message;
-        console.log("Attempting Tesseract.js OCR extraction...\n");
 
+        console.log("🔄 Attempting Tesseract fallback...");
         try {
-          pdfText = await extractTextWithTesseract(filePath);
-          console.log("✅ Tesseract.js OCR extraction successful: " + pdfText.length + " characters\n");
+          extractedText = await extractTextWithTesseract(filePath);
+          console.log("✅ Tesseract extraction successful: " + extractedText.length + " characters");
         } catch (tesseractErr) {
-          console.error("\n⚠️ Tesseract.js OCR failed: " + tesseractErr.message);
-          ocrErrors.tesseract = tesseractErr.message;
-          console.log("Attempting OCR.space API extraction...\n");
+          console.error("❌ Both OCR methods failed for image");
+          if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
 
-          try {
-            pdfText = await extractTextFromImagePDF(filePath);
-            console.log("✅ OCR.space API extraction successful: " + pdfText.length + " characters\n");
-          } catch (ocrErr) {
-            console.error("\n⚠️ OCR.space API failed: " + ocrErr.message);
-            ocrErrors.ocrSpace = ocrErr.message;
-            console.log("Attempting fallback to alternative OCR service...\n");
+          return res.json({
+            success: false,
+            message: "Could not read the prescription image. Please ensure the image is clear and text is legible.",
+            extractedText: "",
+            matchedMedicines: [],
+            matchedCount: 0,
+          });
+        }
+      }
+    } else if (isPDF) {
+      console.log("📕 Processing PDF...");
+      try {
+        console.log("1️⃣  Trying pdf-parse for text extraction...");
+        extractedText = await extractTextFromPDF(filePath);
 
-            try {
-              pdfText = await extractTextWithAlternativeOCR(filePath);
-              console.log("✅ Alternative OCR extraction successful: " + pdfText.length + " characters\n");
-            } catch (altOcrErr) {
-              console.error("\n❌ ALL OCR METHODS FAILED");
-              console.error("=".repeat(80));
-              console.error("OCR Error Summary:");
-              console.error("  1. pdf-parse: " + (ocrErrors.pdfParse || "N/A"));
-              console.error("  2. Google Vision: " + (ocrErrors.googleVision || "N/A"));
-              console.error("  3. Tesseract.js: " + (ocrErrors.tesseract || "N/A"));
-              console.error("  4. OCR.space: " + (ocrErrors.ocrSpace || "N/A"));
-              console.error("  5. Alternative OCR: " + altOcrErr.message);
-              console.error("=".repeat(80));
+        if (extractedText && extractedText.length > 100) {
+          console.log("✅ PDF text extracted: " + extractedText.length + " characters");
+        } else {
+          console.log("⚠️  PDF returned minimal text (" + (extractedText?.length || 0) + " chars) - likely scanned PDF");
+          extractedText = "";
+        }
+      } catch (pdfErr) {
+        console.error("⚠️  pdf-parse failed: " + pdfErr.message);
+        ocrErrors.pdfParse = pdfErr.message;
+      }
 
-              if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      // Fallback to Google Vision for scanned PDFs
+      if (!extractedText || extractedText.length < 100) {
+        console.log("2️⃣  Trying Google Cloud Vision OCR...");
+        try {
+          extractedText = await extractTextWithGoogleVision(filePath);
+          console.log("✅ Google Vision extraction successful: " + extractedText.length + " characters");
+        } catch (googleErr) {
+          console.error("❌ Both extraction methods failed for PDF");
+          if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
 
-              return res.json({
-                success: false,
-                message: "Could not extract text from PDF. All OCR methods failed. Please try a text-based PDF.",
-                extractedText: "",
-              });
-            }
-          }
+          return res.json({
+            success: false,
+            message: "Could not read the PDF. Try uploading a clear image instead.",
+            extractedText: "",
+            matchedMedicines: [],
+            matchedCount: 0,
+          });
         }
       }
     }
 
-    if (!pdfText || pdfText.trim().length === 0) {
+    // Validate extracted text
+    if (!extractedText || extractedText.trim().length === 0) {
       if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
       return res.json({
         success: false,
-        message: "PDF is empty or unreadable",
+        message: "No text found in prescription. Please upload a clearer image.",
+        extractedText: "",
+        matchedMedicines: [],
         matchedCount: 0,
-        medicines: [],
+      });
+    }
+
+    // Extract medicine names from OCR text
+    console.log("\n📋 STEP 1: Extracting medicine names from text...");
+    const extractedMedicines = extractBrandStrengthValues(extractedText);
+
+    if (extractedMedicines.length === 0) {
+      console.log("⚠️  No medicines found in prescription text");
+      if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      return res.json({
+        success: false,
+        message: "No medicines found in prescription.",
+        extractedText: extractedText,
         extractedMedicines: [],
-      });
-    }
-
-    // Extract Brand & Strength values from prescription
-    const brandStrengthValues = extractBrandStrengthValues(pdfText);
-
-    if (brandStrengthValues.length === 0) {
-      console.log("WARNING: No Brand & Strength values found in prescription");
-      if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
-      return res.json({
-        success: false,
-        message: "No medicines found in Brand & Strength column",
-        brandStrength: [],
-        extractedCount: 0,
+        matchedMedicines: [],
         matchedCount: 0,
-        unmatchedCount: 0,
-        medicines: [],
       });
     }
 
-    // Log extracted Brand & Strength
-    console.log("STEP 1: Extracted " + brandStrengthValues.length + " Brand & Strength values\n");
+    console.log("✅ Found " + extractedMedicines.length + " potential medicines");
 
     // Load all medicines from database
-    console.log("STEP 2: Loading medicines from database...");
-    const dbMedicines = await Medicine.find({}).lean();
-    console.log("Total in database: " + dbMedicines.length + " medicines\n");
+    console.log("\n💾 STEP 2: Loading medicines from database...");
+    const dbMedicines = await Medicine.find({ status: "Active" }).lean();
+    console.log("✅ Loaded " + dbMedicines.length + " active medicines from database");
 
-    // Match Brand & Strength values with database medicines
-    console.log("STEP 3: Matching Brand & Strength values with database...");
+    // Match extracted medicines with database
+    console.log("\n🔄 STEP 3: Matching medicines with database...");
     console.log("-".repeat(80));
 
     const matchedMedicines = [];
     const unmatchedMedicines = [];
 
-    for (const brandStrength of brandStrengthValues) {
-      console.log("Checking: " + brandStrength);
-      const dbMedicine = findMatchInDatabase(brandStrength, dbMedicines);
+    for (const extractedMed of extractedMedicines) {
+      const dbMed = findMatchInDatabase(extractedMed, dbMedicines);
 
-      if (dbMedicine) {
-        console.log("  MATCHED: " + dbMedicine.description);
+      if (dbMed) {
         matchedMedicines.push({
-          medicineId: dbMedicine._id.toString(),
-          name: dbMedicine.description,
-          description: dbMedicine.description,
-          mfr: dbMedicine.mfr || "N/A",
-          price: dbMedicine.netValue || dbMedicine.newMrp || 0,
-          mrp: dbMedicine.newMrp || 0,
-          qty: dbMedicine.qty || 0,
-          stock: dbMedicine.qty || 0,
-          pack: dbMedicine.pack || "N/A",
-          gstPercent: dbMedicine.gstPercent || 0,
-          discPercent: dbMedicine.discPercent || 0,
-          vendor: dbMedicine.vendor || "N/A",
-          batchNo: dbMedicine.batchNo || "",
-          hsnCode: dbMedicine.hsnCode || "",
+          _id: dbMed._id.toString(),
+          medicineId: dbMed._id.toString(),
+          description: dbMed.description,
+          name: dbMed.description,
+          mfr: dbMed.mfr || "N/A",
+          vendor: dbMed.vendor || "N/A",
+          pack: dbMed.pack || "N/A",
+          batchNo: dbMed.batchNo || "",
+          hsnCode: dbMed.hsnCode || "",
+          price: dbMed.newMrp || 0,
+          mrp: dbMed.newMrp || 0,
+          netValue: dbMed.netValue || dbMed.newMrp || 0,
+          qty: dbMed.qty || 0,
+          stock: dbMed.qty || 0,
+          inStock: (dbMed.qty || 0) > 0,
+          gstPercent: dbMed.gstPercent || 5,
+          discPercent: dbMed.discPercent || 0,
         });
       } else {
-        console.log("  NO MATCH");
         unmatchedMedicines.push({
-          name: brandStrength,
+          name: extractedMed,
         });
       }
     }
 
     console.log("-".repeat(80));
-    console.log("\nSTEP 4: MATCHING RESULTS");
-    console.log("Matched: " + matchedMedicines.length);
-    console.log("Unmatched: " + unmatchedMedicines.length);
-
-    if (unmatchedMedicines.length > 0) {
-      console.log("\nUnmatched Brand & Strength values:");
-      unmatchedMedicines.forEach((med, i) => {
-        console.log("  " + (i + 1) + ". " + med.name);
-      });
-    }
+    console.log("\n✅ MATCHING COMPLETE");
+    console.log("   Matched: " + matchedMedicines.length);
+    console.log("   Unmatched: " + unmatchedMedicines.length);
 
     // Cleanup file
     if (filePath && fs.existsSync(filePath)) {
@@ -395,38 +340,46 @@ exports.extractMedicines = async (req, res) => {
     }
 
     console.log("\n" + "=".repeat(80));
-    console.log("FINAL: BRAND & STRENGTH VALUES EXTRACTED");
+    console.log("OCR PROCESSING COMPLETE");
     console.log("=".repeat(80));
-    brandStrengthValues.forEach((val, i) => {
-      console.log((i + 1) + ". " + val);
-    });
+    console.log("✅ Success: " + (matchedMedicines.length > 0));
+    console.log("✅ Extracted: " + extractedMedicines.length + " medicines");
+    console.log("✅ Matched: " + matchedMedicines.length + " medicines");
+    console.log("✅ Text: " + extractedText.length + " characters");
     console.log("=".repeat(80) + "\n");
 
     return res.json({
       success: true,
-      message: "PDF text extracted successfully",
-      extractedText: pdfText,
+      message: matchedMedicines.length > 0
+        ? `Found ${matchedMedicines.length} matching medicine(s)`
+        : "No matching medicines found.",
+      extractedText: extractedText,
+      extractedMedicines: extractedMedicines,
+      matchedMedicines: matchedMedicines,
+      matchedCount: matchedMedicines.length,
+      unmatchedCount: unmatchedMedicines.length,
+      totalExtracted: extractedMedicines.length,
     });
 
   } catch (error) {
-    console.error("ERROR: " + error.message);
+    console.error("\n❌ ERROR: " + error.message);
     console.error("Stack: " + error.stack);
 
     if (filePath && fs.existsSync(filePath)) {
       try {
         fs.unlinkSync(filePath);
-      } catch (e) {}
+      } catch (e) {
+        console.error("Failed to cleanup file: " + e.message);
+      }
     }
 
     return res.status(500).json({
       success: false,
-      message: error.message || "Server error processing prescription",
-      brandStrength: [],
-      extractedCount: 0,
+      message: "Server error processing prescription. Please try again.",
+      extractedText: "",
+      extractedMedicines: [],
+      matchedMedicines: [],
       matchedCount: 0,
-      unmatchedCount: 0,
-      medicines: [],
-      unmatchedMedicines: [],
     });
   }
 };

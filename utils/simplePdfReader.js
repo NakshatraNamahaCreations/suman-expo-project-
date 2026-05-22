@@ -14,11 +14,10 @@ const extractTextFromPDF = async (filePath) => {
     console.log("PDF Pages: " + pdfData.numpages);
     console.log("Text extracted: " + text.length + " chars");
 
-    if (!text || text.length < 50) {
-      console.log("WARNING: PDF appears to be image-based (scanned)");
-      console.log("To use scanned prescriptions, please convert PDF to text-based format first");
-      console.log("Or upload a clear photo of the prescription instead");
-      throw new Error("PDF is image-based. Please use text-based PDF or upload a photo.");
+    if (!text || text.trim().length === 0) {
+      console.log("⚠️ PDF appears to be image-based (scanned) - no text found");
+      console.log("Will use Google Vision OCR for scanned PDFs");
+      throw new Error("PDF is image-based (scanned PDF). Needs OCR processing.");
     }
 
     return text;

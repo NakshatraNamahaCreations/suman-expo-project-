@@ -23,19 +23,25 @@ const extractTextWithTesseract = async (filePath) => {
     const fileBuffer = fs.readFileSync(filePath);
     const base64Data = fileBuffer.toString("base64");
     const isPDF = filePath.toLowerCase().endsWith(".pdf");
-
-    // Determine MIME type
-    let mimeType = "image/png";
     const ext = path.extname(filePath).toLowerCase();
 
+    if (isPDF) {
+      console.log("⚠️ WARNING: Tesseract is not suitable for PDF files");
+      console.log("Tesseract.js is designed for image OCR, not PDF parsing");
+      console.log("PDF files should be processed by Google Cloud Vision or pdf-parse");
+      throw new Error("Tesseract.js cannot process PDF files. Use Google Vision for PDFs.");
+    }
+
+    // Determine MIME type for images
+    let mimeType = "image/png";
     if (ext === ".jpg" || ext === ".jpeg") {
       mimeType = "image/jpeg";
     } else if (ext === ".png") {
       mimeType = "image/png";
     } else if (ext === ".gif") {
       mimeType = "image/gif";
-    } else if (isPDF) {
-      mimeType = "application/pdf";
+    } else if (ext === ".webp") {
+      mimeType = "image/webp";
     }
 
     console.log("Detected file type: " + mimeType);

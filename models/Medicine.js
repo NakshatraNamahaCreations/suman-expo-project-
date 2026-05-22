@@ -141,7 +141,9 @@ medicineSchema.pre("save", function () {
   if (this.description) {
     this.normalizedName = this.description
       .toLowerCase()
+      .trim()
       .replace(/\s+/g, " ")
+      .replace(/[^\w\s]/g, "")
       .trim();
   }
 });

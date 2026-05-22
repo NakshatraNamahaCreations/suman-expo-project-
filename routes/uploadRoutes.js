@@ -13,24 +13,26 @@ const storage = multer.diskStorage({
   },
 });
 
-// File filter to accept PDF, images, and Excel files
+// File filter to accept PDF and image files for prescription uploads
 const fileFilter = (req, file, cb) => {
   const allowed = [
-    "application/pdf",
-    "image/jpeg",
-    "image/jpg",
-    "image/png",
-    "image/webp",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "application/vnd.ms-excel",
-    "text/csv",
-    "application/octet-stream",
+    "application/pdf",           // PDF files
+    "image/jpeg",                // JPG/JPEG images
+    "image/jpg",                 // JPG variant
+    "image/png",                 // PNG images
+    "image/webp",                // WEBP images
+    "application/octet-stream",  // Fallback for various file types
   ];
 
-  if (allowed.includes(file.mimetype)) {
+  // Also check file extension as fallback
+  const fileName = file.originalname.toLowerCase();
+  const allowedExtensions = [".pdf", ".jpg", ".jpeg", ".png", ".webp"];
+  const fileExt = require("path").extname(fileName).toLowerCase();
+
+  if (allowed.includes(file.mimetype) || allowedExtensions.includes(fileExt)) {
     cb(null, true);
   } else {
-    cb(new Error(`File type not allowed: ${file.mimetype}`), false);
+    cb(new Error(`File type not allowed: ${file.mimetype}. Supported: PDF, JPG, JPEG, PNG, WEBP`), false);
   }
 };
 
@@ -54,7 +56,7 @@ const logUpload = (req, res, next) => {
   next();
 };
 
-// Unified medicine extraction (PDF, Excel, Image)
+// Prescription OCR endpoint - supports PDF and image files
 router.post(
   "/extract-medicines",
   upload.single("file"),
@@ -62,7 +64,7 @@ router.post(
   uploadController.extractMedicines
 );
 
-// Diagnostic endpoint to test OCR methods
+// Diagnostic endpoint to test all OCR methods
 router.post(
   "/test-ocr",
   upload.single("file"),
