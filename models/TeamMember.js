@@ -28,7 +28,7 @@ const teamMemberSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ["CA", "Executive", "Manager"],
+      enum: ["Super Admin", "CA", "Executive", "Manager"],
       default: "Executive",
     },
     permissions: {
@@ -39,6 +39,8 @@ const teamMemberSchema = new mongoose.Schema(
         "prescriptions",
         "patients",
         "inventory",
+        "vendor-management",
+        "categories",
         "orders",
         "billing",
         "reports",

@@ -1,5 +1,6 @@
 const Medicine = require("../models/Medicine");
 const XLSX = require("xlsx");
+const fs = require("fs");
 
 
 /* ── pagination helper ───────────────────────────────────────── */
@@ -19,10 +20,42 @@ function paginate(query) {
 exports.uploadMedicinesExcel = async (req, res) => {
   try {
     if (!req.file) {
+      console.error("❌ No file uploaded");
       return res.status(400).json({ message: "Excel file required" });
     }
 
-    const workbook = XLSX.read(req.file.buffer, { type: "buffer", defval: "" });
+    console.log("📁 File received:", {
+      filename: req.file.filename,
+      mimetype: req.file.mimetype,
+      size: req.file.size
+    });
+
+    let workbook;
+    try {
+      // Support both memoryStorage (buffer) and diskStorage (path)
+      if (req.file.buffer) {
+        workbook = XLSX.read(req.file.buffer, { type: "buffer", defval: "" });
+      } else if (req.file.path) {
+        const fileData = fs.readFileSync(req.file.path);
+        workbook = XLSX.read(fileData, { type: "buffer", defval: "" });
+        // Clean up temp file after reading
+        fs.unlinkSync(req.file.path);
+      } else {
+        return res.status(400).json({ message: "No file data available" });
+      }
+      console.log("✅ XLSX file parsed successfully");
+    } catch (xlsxError) {
+      console.error("❌ XLSX parsing error:", xlsxError.message);
+      if (req.file.path) {
+        try { fs.unlinkSync(req.file.path); } catch {}
+      }
+      return res.status(400).json({
+        message: "Invalid Excel file",
+        error: xlsxError.message
+      });
+    }
+
+    console.log("📚 Available sheets:", workbook.SheetNames);
 
     // Try to find the sheet with data (skip Instructions, Settings, etc.)
     let sheet = null;
@@ -30,38 +63,68 @@ exports.uploadMedicinesExcel = async (req, res) => {
 
     for (let i = 0; i < workbook.SheetNames.length; i++) {
       const name = workbook.SheetNames[i];
+      console.log(`Checking sheet: ${name}`);
+
       if (name.toLowerCase().includes('instruction') || name.toLowerCase().includes('guide')) {
+        console.log(`  → Skipping ${name} (instructions/guide)`);
         continue;
       }
 
       const testSheet = workbook.Sheets[name];
-      const testData = XLSX.utils.sheet_to_json(testSheet, { defval: "" });
+      if (!testSheet) continue;
 
-      // Use first sheet with actual data rows
-      if (testData.length > 1) { // At least 1 data row (excluding header)
-        sheet = testSheet;
-        sheetName = name;
-        break;
-      }
+      sheet = testSheet;
+      sheetName = name;
+      console.log(`  → Using sheet: ${name}`);
+      break;
     }
 
     if (!sheet) {
-      return res.status(400).json({ message: "No data found in Excel file. Please check the 'Medicines' sheet has data rows." });
+      return res.status(400).json({ message: "No data found in Excel file. Please check the file has data rows." });
     }
 
-    // Parse with header row in row 1, data starting from row 2
-    const data = XLSX.utils.sheet_to_json(sheet, {
-      defval: "",
-      blankrows: false
-    });
+    // Detect header row — template may have title/empty rows before actual headers
+    let data;
+    try {
+      const KNOWN_HEADERS = ["description", "product name", "medicine name", "name", "item name"];
+      const allRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+
+      // Scan first 10 rows for the row containing a known header
+      let headerRowIdx = 0;
+      for (let i = 0; i < Math.min(allRows.length, 10); i++) {
+        const row = allRows[i].map(c => String(c).trim().toLowerCase());
+        if (row.some(cell => KNOWN_HEADERS.includes(cell))) {
+          headerRowIdx = i;
+          console.log(`  → Found header row at index ${i}`);
+          break;
+        }
+      }
+
+      data = XLSX.utils.sheet_to_json(sheet, {
+        defval: "",
+        blankrows: false,
+        range: headerRowIdx,
+      });
+      console.log(`✅ Sheet parsed: ${sheetName} with ${data ? data.length : 0} rows (header at row ${headerRowIdx + 1})`);
+    } catch (parseError) {
+      console.error("❌ Sheet parsing error:", parseError.message);
+      return res.status(400).json({
+        message: "Failed to parse sheet data",
+        error: parseError.message
+      });
+    }
 
     // Debug: Log detected columns and data
+    if (!data || !Array.isArray(data)) {
+      return res.status(400).json({ message: "Invalid data format in sheet" });
+    }
+
     console.log("📋 Sheet name:", sheetName);
     console.log("📋 Detected columns:", data.length > 0 ? Object.keys(data[0]) : "No data");
     console.log("📊 Total data rows found:", data.length);
 
     if (data.length === 0) {
-      return res.status(400).json({ message: "No data rows found. Ensure row 2 onwards contains medicine data." });
+      return res.status(400).json({ message: "No data rows found. Ensure the sheet contains medicine data." });
     }
 
     // ✅ CLEAN FUNCTION (remove spaces, tabs, multiple spaces)
@@ -191,9 +254,11 @@ exports.uploadMedicinesExcel = async (req, res) => {
     });
 
   } catch (error) {
+    console.error("❌ Excel parsing error:", error);
     res.status(500).json({
       message: "Excel parsing failed",
       error: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 };
@@ -202,12 +267,18 @@ exports.uploadMedicinesExcel = async (req, res) => {
 exports.bulkSaveMedicines = async (req, res) => {
   try {
     const medicines = req.body.medicines;
+    const { vendorId, vendorName } = req.body;
 
     let created = 0;
     let updated = 0;
 
     for (let item of medicines) {
       const { id, exists, ...cleanData } = item;
+
+      // Ensure vendor is set
+      if (vendorName && !cleanData.vendor) {
+        cleanData.vendor = vendorName;
+      }
 
       if (id) {
         const updatedData = {
@@ -241,7 +312,8 @@ exports.bulkSaveMedicines = async (req, res) => {
     res.json({
       success: true,
       created,
-      updated
+      updated,
+      vendor: vendorName
     });
 
   } catch (error) {
