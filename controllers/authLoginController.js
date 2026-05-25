@@ -1,5 +1,6 @@
 const jwt = require("jsonwebtoken");
 const LoginUser = require("../models/LoginUser");
+const sms = require("../utils/sms");
 
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key";
 const JWT_EXPIRE = process.env.JWT_EXPIRE || "7d";
@@ -61,17 +62,21 @@ exports.sendOTP = async (req, res) => {
 
     await user.save();
 
-    console.log(`[OTP] Phone: ${phone}, OTP: ${otp}`);
+    // Send OTP via MSG91
+    try {
+      await sms.sendOTP(phone, otp, user.name || 'User');
+    } catch (smsError) {
+      console.error(`[OTP Send Error] Failed to send via MSG91:`, smsError.message);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to send OTP via SMS. Please try again.",
+      });
+    }
 
     res.json({
       success: true,
       message: "OTP sent successfully",
       phone,
-      otp: {
-        code: otp,
-        createdAt: new Date(),
-        expiresAt,
-      },
     });
   } catch (err) {
     console.error("Send OTP error:", err);
@@ -128,8 +133,19 @@ exports.verifyOTP = async (req, res) => {
       });
     }
 
-    // Verify OTP
-    if (user.otp.code !== otp) {
+    // Verify OTP via MSG91
+    try {
+      const verifyResult = await sms.verifyOTP(phone, otp);
+      if (verifyResult.type !== "success") {
+        await user.save();
+        const remaining = 5 - user.otp.attempts;
+        return res.status(400).json({
+          success: false,
+          message: `Invalid OTP. ${remaining} attempts remaining.`,
+        });
+      }
+    } catch (smsError) {
+      console.error(`[OTP Verify Error] MSG91 verification failed:`, smsError.message);
       await user.save();
       const remaining = 5 - user.otp.attempts;
       return res.status(400).json({
