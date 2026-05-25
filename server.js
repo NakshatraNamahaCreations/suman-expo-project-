@@ -49,8 +49,13 @@ app.use(
       "https://adorable-selkie-b5b2c0.netlify.app",
       "https://bucolic-rolypoly-f7eb39.netlify.app",
       /\.rgmedlink\.com$/,
+      /\.onrender\.com$/,
+      /\.vercel\.app$/,
+      /localhost/,
     ],
     credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
@@ -60,11 +65,14 @@ app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
 // Note: express-mongo-sanitize removed — incompatible with Express 5 read-only req.query
 
-// Auth middleware
-app.use(authMiddleware);
-
 // Health check
 app.get("/health", (req, res) => res.json({ status: "ok", uptime: process.uptime() }));
+
+// Upload routes (NO auth required for file uploads)
+app.use("/api/upload", uploadRoutes);
+
+// Auth middleware (applied to all other routes)
+app.use(authMiddleware);
 
 /* ROUTES */
 app.use("/api/medicines", medicineRoutes);
@@ -80,7 +88,6 @@ app.use("/api/auth", authRoutes);
 app.use("/api/auth-login", authLoginRoutes);
 app.use("/api/tickets", ticketRoutes);
 app.use("/api/team-members", teamMemberRoutes);
-app.use("/api/upload", uploadRoutes);
 
 app.get("/", (req, res) => {
   res.send("RG Medlink API Running");
