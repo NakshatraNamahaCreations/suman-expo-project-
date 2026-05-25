@@ -73,11 +73,18 @@ exports.sendOTP = async (req, res) => {
       });
     }
 
-    res.json({
+    const response = {
       success: true,
       message: "OTP sent successfully",
       phone,
-    });
+    };
+
+    // Include OTP in response for development/testing
+    if (process.env.NODE_ENV !== "production") {
+      response.otp = { code: otp };
+    }
+
+    res.json(response);
   } catch (err) {
     console.error("Send OTP error:", err);
     res.status(500).json({
