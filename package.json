@@ -11,6 +11,7 @@
   "description": "",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.81.0",
+    "@google-cloud/storage": "^7.19.0",
     "@google-cloud/vision": "^5.3.5",
     "axios": "^1.7.7",
     "bcryptjs": "^3.0.3",
