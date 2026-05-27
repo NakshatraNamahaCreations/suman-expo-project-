@@ -271,7 +271,7 @@ function paginate(query) {
 
 exports.createOrder = async (req, res) => {
   try {
-    const { patientId, addressId, prescriptionId, items, pharmacistReview, unmatchedMedicines, totalAmount, deliveryFee, gst, cgst, sgst, itemTotal, userId: requestUserId, prescriptionFile, razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
+    const { patientId, addressId, prescriptionId, items, pharmacistReview, unmatchedMedicines, totalAmount, deliveryFee, gst, cgst, sgst, itemTotal, userId: requestUserId, prescriptionFile, userPrescriptionFile, razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
 
     // ✅ VALIDATE PATIENT ID
     if (!patientId) {
@@ -379,6 +379,16 @@ exports.createOrder = async (req, res) => {
       userId,
       prescription: prescriptionId,
       prescriptionFile: prescriptionFile || null,
+      // Cloudinary-backed prescription file (from user's prescription library)
+      userPrescriptionFile: userPrescriptionFile
+        ? {
+            fileId: userPrescriptionFile.fileId || userPrescriptionFile._id || null,
+            cloudinaryUrl: userPrescriptionFile.cloudinaryUrl || "",
+            publicId: userPrescriptionFile.publicId || "",
+            fileType: userPrescriptionFile.fileType || "image",
+            originalFileName: userPrescriptionFile.originalFileName || "",
+          }
+        : undefined,
       patient: patient._id,
       orderSource: "mobile",
       subtotal: serverSubtotal,

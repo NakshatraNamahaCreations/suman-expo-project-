@@ -132,6 +132,7 @@ const uploadRoutes = require("./routes/uploadRoutes");
 const cloudinaryUploadRoutes = require("./routes/cloudinaryUploadRoutes");
 const categoryRoutes = require("./routes/categoryRoutes");
 const vendorRoutes = require("./routes/vendorRoutes");
+const userPrescriptionRoutes = require("./routes/userPrescriptionRoutes");
 
 const { authMiddleware } = require("./middleware/auth");
 
@@ -188,6 +189,9 @@ app.use("/api/upload", uploadRoutes);
 
 // Cloudinary upload routes (no auth required for uploads)
 app.use("/api/cloudinary", cloudinaryUploadRoutes);
+
+// User prescription file routes (no auth required — mobile users not admin-authed)
+app.use("/api/user-prescriptions", userPrescriptionRoutes);
 
 // Auth middleware for protected routes
 app.use(authMiddleware);

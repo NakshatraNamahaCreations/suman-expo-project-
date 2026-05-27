@@ -688,9 +688,40 @@ const fs = require("fs");
 const axios = require("axios");
 const vision = require("@google-cloud/vision");
 const Medicine = require("../models/Medicine");
+const UserPrescriptionFile = require("../models/UserPrescriptionFile");
 const { deleteFromCloudinary } = require("../config/cloudinary");
 
 const client = new vision.ImageAnnotatorClient();
+
+/**
+ * Save prescription file info to UserPrescriptionFile collection.
+ * Called only when extraction succeeds and userId is provided.
+ */
+async function saveUserPrescriptionFile({ userId, cloudinaryUrl, publicId, mimeType, fileName, fileSize }) {
+  try {
+    const fileType = mimeType?.includes("pdf")
+      ? "pdf"
+      : mimeType?.startsWith("image/")
+        ? "image"
+        : "other";
+
+    const doc = await UserPrescriptionFile.create({
+      userId,
+      cloudinaryUrl,
+      publicId,
+      fileType,
+      mimeType: mimeType || "",
+      originalFileName: fileName || "",
+      fileSize: fileSize || 0,
+    });
+    console.log(`✅ Prescription file saved for user ${userId}: ${doc._id}`);
+    return doc;
+  } catch (err) {
+    // Non-fatal — log and continue
+    console.error("⚠️ Could not save UserPrescriptionFile:", err.message);
+    return null;
+  }
+}
 
 exports.extractMedicinesFromPrescription = async (req, res) => {
   let cloudinaryPublicId = null;
@@ -709,6 +740,9 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
     cloudinaryUrl = req.file.path; // Cloudinary secure URL
     const fileName = req.file.originalname;
     const mimeType = req.file.mimetype;
+    const fileSize = req.file.size || 0;
+    // Optional userId — when provided the file is saved to the user's prescription library
+    const userId = req.body?.userId || null;
 
     console.log(`\n📄 Processing: ${fileName}`);
     console.log(`📄 MIME Type: ${mimeType}`);
@@ -862,14 +896,18 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
     console.log(`✅ Matched ${matchedMedicines.length} medicines`);
     console.log("💊 FINAL MATCHED MEDICINES:", JSON.stringify(matchedMedicines, null, 2));
 
-    // NOTE: Cloudinary file is kept for reference/history.
-    // To delete after extraction, uncomment the code below:
-    // try {
-    //   await deleteFromCloudinary(cloudinaryPublicId, "auto");
-    //   console.log("✅ Cleaned up prescription from Cloudinary after processing");
-    // } catch (deleteError) {
-    //   console.error("Warning: Could not delete file from Cloudinary:", deleteError.message);
-    // }
+    // ── Save prescription file to user's library (if userId provided) ───────
+    let savedPrescriptionFile = null;
+    if (userId) {
+      savedPrescriptionFile = await saveUserPrescriptionFile({
+        userId,
+        cloudinaryUrl,
+        publicId: cloudinaryPublicId,
+        mimeType,
+        fileName,
+        fileSize,
+      });
+    }
 
     return res.json({
       success: true,
@@ -887,6 +925,18 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
       // Cloudinary file information
       prescriptionUrl: cloudinaryUrl,
       publicId: cloudinaryPublicId,
+
+      // Saved prescription file reference (null if userId not provided)
+      prescriptionFileId: savedPrescriptionFile?._id || null,
+      prescriptionFile: savedPrescriptionFile
+        ? {
+            _id: savedPrescriptionFile._id,
+            cloudinaryUrl: savedPrescriptionFile.cloudinaryUrl,
+            publicId: savedPrescriptionFile.publicId,
+            fileType: savedPrescriptionFile.fileType,
+            originalFileName: savedPrescriptionFile.originalFileName,
+          }
+        : null,
     });
   } catch (error) {
     console.error("❌ Prescription extraction error:", error);

@@ -31,11 +31,23 @@ const orderSchema = new mongoose.Schema(
       ref: "Prescription",
     },
 
-    // Direct prescription file reference for quick access
+    // Direct prescription file reference for quick access (legacy local path)
     prescriptionFile: {
       filePath: String,
       fileName: String,
       uploadedAt: Date,
+    },
+
+    // Cloudinary-hosted prescription file (permanent, survives deploys)
+    userPrescriptionFile: {
+      fileId: String,                // UserPrescriptionFile._id
+      cloudinaryUrl: String,         // Cloudinary secure URL
+      publicId: String,              // Cloudinary public_id
+      fileType: {
+        type: String,
+        enum: ["image", "pdf", "other"],
+      },
+      originalFileName: String,
     },
 
     patient: {
