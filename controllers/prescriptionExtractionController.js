@@ -837,12 +837,22 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
     }
 
     if (!extractedText || extractedText.trim().length === 0) {
-      // Clean up from Cloudinary when no text extracted
-      try {
-        await deleteFromCloudinary(cloudinaryPublicId, "auto");
-        console.log("✅ Cleaned up prescription from Cloudinary (no text found)");
-      } catch (deleteError) {
-        console.error("Warning: Could not delete file from Cloudinary:", deleteError.message);
+      // If userId provided, save the file to user's library before any cleanup
+      let savedFileOnNoText = null;
+      if (userId) {
+        savedFileOnNoText = await saveUserPrescriptionFile({
+          userId, cloudinaryUrl, publicId: cloudinaryPublicId,
+          mimeType, fileName, fileSize,
+        });
+        console.log("📁 Saved prescription file to user library (no text found)");
+      } else {
+        // No user — clean up orphaned file from Cloudinary
+        try {
+          await deleteFromCloudinary(cloudinaryPublicId, "auto");
+          console.log("✅ Cleaned up prescription from Cloudinary (no text found, no user)");
+        } catch (deleteError) {
+          console.error("Warning: Could not delete file from Cloudinary:", deleteError.message);
+        }
       }
 
       return res.json({
@@ -853,8 +863,18 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
         matchedMedicines: [],
         medicines: [],
         matchedCount: 0,
-        prescriptionUrl: cloudinaryUrl, // Return URL for reference
-        publicId: cloudinaryPublicId,
+        prescriptionUrl: userId ? cloudinaryUrl : null,
+        publicId: userId ? cloudinaryPublicId : null,
+        prescriptionFileId: savedFileOnNoText?._id || null,
+        prescriptionFile: savedFileOnNoText
+          ? {
+              _id: savedFileOnNoText._id,
+              cloudinaryUrl: savedFileOnNoText.cloudinaryUrl,
+              publicId: savedFileOnNoText.publicId,
+              fileType: savedFileOnNoText.fileType,
+              originalFileName: savedFileOnNoText.originalFileName,
+            }
+          : null,
       });
     }
 
@@ -868,12 +888,22 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
     console.log("🧾 FINAL OCR MEDICINES:", JSON.stringify(extractedMedicines, null, 2));
 
     if (extractedMedicines.length === 0) {
-      // Clean up from Cloudinary when no medicines found
-      try {
-        await deleteFromCloudinary(cloudinaryPublicId, "auto");
-        console.log("✅ Cleaned up prescription from Cloudinary (no medicines found)");
-      } catch (deleteError) {
-        console.error("Warning: Could not delete file from Cloudinary:", deleteError.message);
+      // If userId provided, save the file to user's library before any cleanup
+      let savedFileOnNoMeds = null;
+      if (userId) {
+        savedFileOnNoMeds = await saveUserPrescriptionFile({
+          userId, cloudinaryUrl, publicId: cloudinaryPublicId,
+          mimeType, fileName, fileSize,
+        });
+        console.log("📁 Saved prescription file to user library (no medicines found)");
+      } else {
+        // No user — clean up orphaned file from Cloudinary
+        try {
+          await deleteFromCloudinary(cloudinaryPublicId, "auto");
+          console.log("✅ Cleaned up prescription from Cloudinary (no medicines found, no user)");
+        } catch (deleteError) {
+          console.error("Warning: Could not delete file from Cloudinary:", deleteError.message);
+        }
       }
 
       return res.json({
@@ -884,8 +914,18 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
         matchedMedicines: [],
         medicines: [],
         matchedCount: 0,
-        prescriptionUrl: cloudinaryUrl, // Return URL for reference
-        publicId: cloudinaryPublicId,
+        prescriptionUrl: userId ? cloudinaryUrl : null,
+        publicId: userId ? cloudinaryPublicId : null,
+        prescriptionFileId: savedFileOnNoMeds?._id || null,
+        prescriptionFile: savedFileOnNoMeds
+          ? {
+              _id: savedFileOnNoMeds._id,
+              cloudinaryUrl: savedFileOnNoMeds.cloudinaryUrl,
+              publicId: savedFileOnNoMeds.publicId,
+              fileType: savedFileOnNoMeds.fileType,
+              originalFileName: savedFileOnNoMeds.originalFileName,
+            }
+          : null,
       });
     }
 
