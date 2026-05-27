@@ -1,5 +1,6 @@
 const jwt = require("jsonwebtoken");
 const LoginUser = require("../models/LoginUser");
+const sms = require("../utils/sms");
 
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key";
 const JWT_EXPIRE = process.env.JWT_EXPIRE || "7d";
@@ -61,11 +62,21 @@ exports.sendOTP = async (req, res) => {
 
     await user.save();
 
+    // Send OTP via MSG91 SMS
+    try {
+      await sms.sendOTP(phone, otp, user.name || "User");
+    } catch (smsErr) {
+      console.error("[MSG91 Send Failed]", smsErr.message);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to send OTP via SMS. Please try again.",
+      });
+    }
+
     res.json({
       success: true,
       message: "OTP sent successfully",
       phone,
-      otp: { code: otp },
     });
   } catch (err) {
     console.error("Send OTP error:", err);
