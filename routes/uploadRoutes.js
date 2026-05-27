@@ -1,7 +1,6 @@
 const router = require("express").Router();
 const { prescriptionUpload } = require("../middleware/cloudinaryUpload");
 const { extractMedicinesFromPrescription } = require("../controllers/prescriptionExtractionController");
-const { authMiddleware } = require("../middleware/auth");
 
 // Health check for upload endpoint
 router.get("/health", (req, res) => {
@@ -9,10 +8,8 @@ router.get("/health", (req, res) => {
 });
 
 // Upload endpoint with Cloudinary - error handling included in middleware
-// Auth middleware to capture userId
 router.post(
   "/extract-medicines",
-  authMiddleware,
   (req, res, next) => {
     prescriptionUpload.single("prescription")(req, res, (err) => {
       if (err) {
