@@ -685,13 +685,16 @@
 
 
 const fs = require("fs");
+const axios = require("axios");
 const vision = require("@google-cloud/vision");
 const Medicine = require("../models/Medicine");
+const { deleteFromCloudinary } = require("../config/cloudinary");
 
 const client = new vision.ImageAnnotatorClient();
 
 exports.extractMedicinesFromPrescription = async (req, res) => {
-  let filePath = null;
+  let cloudinaryPublicId = null;
+  let cloudinaryUrl = null;
 
   try {
     if (!req.file) {
@@ -701,34 +704,60 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
       });
     }
 
-    filePath = req.file.path;
+    // Get file info from Cloudinary (multer-storage-cloudinary provides this)
+    cloudinaryPublicId = req.file.filename; // Cloudinary public_id
+    cloudinaryUrl = req.file.path; // Cloudinary secure URL
     const fileName = req.file.originalname;
     const mimeType = req.file.mimetype;
 
     console.log(`\n📄 Processing: ${fileName}`);
     console.log(`📄 MIME Type: ${mimeType}`);
+    console.log(`☁️ Cloudinary URL: ${cloudinaryUrl}`);
+    console.log(`☁️ Cloudinary Public ID: ${cloudinaryPublicId}`);
 
-    if (!fs.existsSync(filePath)) {
+    if (!cloudinaryUrl || !cloudinaryPublicId) {
       return res.status(400).json({
         success: false,
-        message: "File not found",
-      });
-    }
-
-    const stats = fs.statSync(filePath);
-
-    if (stats.size === 0) {
-      safeDeleteFile(filePath);
-
-      return res.status(400).json({
-        success: false,
-        message: "File is empty",
+        message: "File upload to Cloudinary failed",
       });
     }
 
     console.log("🔍 Extracting text with Google Vision DOCUMENT_TEXT_DETECTION...");
 
-    const imageBuffer = fs.readFileSync(filePath);
+    // Fetch image from Cloudinary URL and convert to buffer
+    let imageBuffer;
+    try {
+      const response = await axios.get(cloudinaryUrl, {
+        responseType: "arraybuffer",
+        timeout: 30000,
+      });
+      imageBuffer = Buffer.from(response.data);
+    } catch (fetchError) {
+      console.error("❌ Error fetching file from Cloudinary:", fetchError.message);
+      // Delete from Cloudinary if fetch fails
+      try {
+        await deleteFromCloudinary(cloudinaryPublicId, "auto");
+      } catch (deleteError) {
+        console.error("Warning: Could not delete file from Cloudinary:", deleteError.message);
+      }
+      return res.status(400).json({
+        success: false,
+        message: "Failed to process the uploaded file. Please try again.",
+      });
+    }
+
+    if (!imageBuffer || imageBuffer.length === 0) {
+      // Delete from Cloudinary if buffer is empty
+      try {
+        await deleteFromCloudinary(cloudinaryPublicId, "auto");
+      } catch (deleteError) {
+        console.error("Warning: Could not delete empty file from Cloudinary:", deleteError.message);
+      }
+      return res.status(400).json({
+        success: false,
+        message: "Uploaded file is empty",
+      });
+    }
 
     let extractedText = "";
 
@@ -759,17 +788,28 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
     } catch (ocrError) {
       console.error("❌ OCR Error:", ocrError.message);
 
-      safeDeleteFile(filePath);
+      // Clean up from Cloudinary on OCR error
+      try {
+        await deleteFromCloudinary(cloudinaryPublicId, "auto");
+        console.log("✅ Cleaned up prescription from Cloudinary after OCR error");
+      } catch (deleteError) {
+        console.error("Warning: Could not delete file from Cloudinary:", deleteError.message);
+      }
 
       return res.status(400).json({
         success: false,
-        message:
-          "Could not read the prescription. Please upload a clear image or PDF.",
+        message: "Could not read the prescription. Please upload a clear image or PDF.",
       });
     }
 
     if (!extractedText || extractedText.trim().length === 0) {
-      safeDeleteFile(filePath);
+      // Clean up from Cloudinary when no text extracted
+      try {
+        await deleteFromCloudinary(cloudinaryPublicId, "auto");
+        console.log("✅ Cleaned up prescription from Cloudinary (no text found)");
+      } catch (deleteError) {
+        console.error("Warning: Could not delete file from Cloudinary:", deleteError.message);
+      }
 
       return res.json({
         success: true,
@@ -779,24 +819,28 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
         matchedMedicines: [],
         medicines: [],
         matchedCount: 0,
+        prescriptionUrl: cloudinaryUrl, // Return URL for reference
+        publicId: cloudinaryPublicId,
       });
     }
 
     console.log(`✅ Extracted ${extractedText.length} characters`);
-
     console.log("\n🧾 RAW OCR TEXT START");
     console.log(extractedText);
     console.log("🧾 RAW OCR TEXT END\n");
 
     const extractedMedicines = extractMedicineRowsFromPrescription(extractedText);
 
-    console.log(
-      "🧾 FINAL OCR MEDICINES:",
-      JSON.stringify(extractedMedicines, null, 2)
-    );
+    console.log("🧾 FINAL OCR MEDICINES:", JSON.stringify(extractedMedicines, null, 2));
 
     if (extractedMedicines.length === 0) {
-      safeDeleteFile(filePath);
+      // Clean up from Cloudinary when no medicines found
+      try {
+        await deleteFromCloudinary(cloudinaryPublicId, "auto");
+        console.log("✅ Cleaned up prescription from Cloudinary (no medicines found)");
+      } catch (deleteError) {
+        console.error("Warning: Could not delete file from Cloudinary:", deleteError.message);
+      }
 
       return res.json({
         success: true,
@@ -806,6 +850,8 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
         matchedMedicines: [],
         medicines: [],
         matchedCount: 0,
+        prescriptionUrl: cloudinaryUrl, // Return URL for reference
+        publicId: cloudinaryPublicId,
       });
     }
 
@@ -814,13 +860,16 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
     const matchedMedicines = await matchMedicinesWithDatabase(extractedMedicines);
 
     console.log(`✅ Matched ${matchedMedicines.length} medicines`);
+    console.log("💊 FINAL MATCHED MEDICINES:", JSON.stringify(matchedMedicines, null, 2));
 
-    console.log(
-      "💊 FINAL MATCHED MEDICINES:",
-      JSON.stringify(matchedMedicines, null, 2)
-    );
-
-    safeDeleteFile(filePath);
+    // NOTE: Cloudinary file is kept for reference/history.
+    // To delete after extraction, uncomment the code below:
+    // try {
+    //   await deleteFromCloudinary(cloudinaryPublicId, "auto");
+    //   console.log("✅ Cleaned up prescription from Cloudinary after processing");
+    // } catch (deleteError) {
+    //   console.error("Warning: Could not delete file from Cloudinary:", deleteError.message);
+    // }
 
     return res.json({
       success: true,
@@ -830,35 +879,32 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
           : "No matching medicines found in database",
 
       extractedText,
-
-      // OCR rows reference only
       extractedMedicines,
-
-      // App display should use this only
       matchedMedicines,
       medicines: matchedMedicines,
-
       matchedCount: matchedMedicines.length,
+
+      // Cloudinary file information
+      prescriptionUrl: cloudinaryUrl,
+      publicId: cloudinaryPublicId,
     });
   } catch (error) {
     console.error("❌ Prescription extraction error:", error);
 
-    safeDeleteFile(filePath);
+    // Try to clean up from Cloudinary on error
+    if (cloudinaryPublicId) {
+      try {
+        await deleteFromCloudinary(cloudinaryPublicId, "auto");
+        console.log("✅ Cleaned up prescription from Cloudinary after error");
+      } catch (deleteError) {
+        console.error("Warning: Could not delete file from Cloudinary:", deleteError.message);
+      }
+    }
 
     return res.status(500).json({
       success: false,
       message: error.message || "Server error while reading prescription",
     });
-  }
-};
-
-function safeDeleteFile(filePath) {
-  try {
-    if (filePath && fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-    }
-  } catch (error) {
-    console.error("File delete error:", error.message);
   }
 }
 

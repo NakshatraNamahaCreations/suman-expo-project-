@@ -1,72 +1,17 @@
 const jwt = require("jsonwebtoken");
 const LoginUser = require("../models/LoginUser");
-const sms = require("../utils/sms");
 
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key";
 const JWT_EXPIRE = process.env.JWT_EXPIRE || "7d";
 
-const OTP_EXPIRY_MINUTES = Number(process.env.OTP_EXPIRY_MINUTES || 10);
-const MAX_OTP_ATTEMPTS = Number(process.env.MAX_OTP_ATTEMPTS || 5);
-
 /* ════════════════════════════════════════════════════
-   HELPERS
+   SEND OTP - Step 1
 ════════════════════════════════════════════════════ */
-
-const cleanIndianPhone = (phone) => {
-  const cleaned = String(phone || "").replace(/\D/g, "");
-
-  // If user sends 91XXXXXXXXXX, remove 91
-  if (cleaned.length === 12 && cleaned.startsWith("91")) {
-    return cleaned.slice(2);
-  }
-
-  // If user sends 0XXXXXXXXXX, remove 0
-  if (cleaned.length === 11 && cleaned.startsWith("0")) {
-    return cleaned.slice(1);
-  }
-
-  return cleaned;
-};
-
-const generateOtp = () => {
-  return Math.floor(1000 + Math.random() * 9000).toString();
-};
-
-const createOtpObject = (otp) => {
-  return {
-    code: otp,
-    createdAt: new Date(),
-    expiresAt: new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000),
-    attempts: 0,
-    verified: false,
-  };
-};
-
-const createToken = (user) => {
-  return jwt.sign(
-    {
-      userId: user._id.toString(),
-      phone: user.phone,
-    },
-    JWT_SECRET,
-    { expiresIn: JWT_EXPIRE }
-  );
-};
-
-/* ════════════════════════════════════════════════════
-   SEND OTP
-════════════════════════════════════════════════════ */
-
 exports.sendOTP = async (req, res) => {
   try {
-    console.log("\n════════════════════════════════════════");
-    console.log("[SEND-OTP] API HIT");
-    console.log("[SEND-OTP] Body:", JSON.stringify(req.body, null, 2));
-    console.log("════════════════════════════════════════");
+    const { phone } = req.body;
 
-    const rawPhone = req.body.phone;
-    const phone = cleanIndianPhone(rawPhone);
-
+    // Validate phone
     if (!phone) {
       return res.status(400).json({
         success: false,
@@ -78,114 +23,67 @@ exports.sendOTP = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Invalid phone number. Must be 10 digits.",
-        receivedPhone: rawPhone,
-        cleanedPhone: phone,
       });
     }
 
-    const otp = generateOtp();
-    const otpData = createOtpObject(otp);
+    // Generate 4-digit OTP
+    const otp = Math.floor(1000 + Math.random() * 9000).toString();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
 
-    console.log("[SEND-OTP] Clean Phone:", phone);
-    console.log("[SEND-OTP] OTP Generated:", otp);
-    console.log("[SEND-OTP] OTP Expiry Minutes:", OTP_EXPIRY_MINUTES);
-
+    // Find or create user
     let user = await LoginUser.findOne({ phone });
 
     if (!user) {
-      console.log("[SEND-OTP] New user creating:", phone);
-
+      // New user - create account
       user = new LoginUser({
         phone,
         name: null,
-        otp: otpData,
+        otp: {
+          code: otp,
+          createdAt: new Date(),
+          expiresAt,
+          attempts: 0,
+          verified: false,
+        },
         lastOtpRequestAt: new Date(),
-        isPhoneVerified: false,
-        status: "active",
       });
     } else {
-      console.log("[SEND-OTP] Existing user found:", phone);
-
-      if (user.status === "blocked") {
-        return res.status(403).json({
-          success: false,
-          message: "Your account is blocked. Please contact support.",
-        });
-      }
-
-      if (user.status === "inactive") {
-        return res.status(403).json({
-          success: false,
-          message: "Your account is inactive. Please contact support.",
-        });
-      }
-
-      user.otp = otpData;
+      // Existing user - update OTP
+      user.otp = {
+        code: otp,
+        createdAt: new Date(),
+        expiresAt,
+        attempts: 0,
+        verified: false,
+      };
       user.lastOtpRequestAt = new Date();
     }
 
     await user.save();
 
-    console.log("[SEND-OTP] OTP saved in database");
-    console.log("[SEND-OTP] Calling MSG91...");
-    console.log("[SEND-OTP] MSG91 Phone:", phone);
-    console.log("[SEND-OTP] MSG91 OTP:", otp);
-    console.log("[SEND-OTP] MSG91 Name:", user.name || "User");
-
-    try {
-      const smsResult = await sms.sendOTP(phone, otp, user.name || "User");
-
-      console.log("[SEND-OTP] MSG91 call succeeded");
-      console.log(
-        "[SEND-OTP] MSG91 Result:",
-        JSON.stringify(smsResult, null, 2)
-      );
-
-      return res.status(200).json({
-        success: true,
-        message: "OTP sent successfully",
-        phone,
-        expiresInMinutes: OTP_EXPIRY_MINUTES,
-      });
-    } catch (smsErr) {
-      console.error("[SEND-OTP] MSG91 call FAILED");
-      console.error("[SEND-OTP] Error Message:", smsErr.message);
-
-      // Remove OTP if SMS failed, so user cannot verify an OTP they never received
-      user.otp = null;
-      await user.save();
-
-      return res.status(500).json({
-        success: false,
-        message: "Failed to send OTP via SMS. Please try again.",
-        error: smsErr.message,
-      });
-    }
+    res.json({
+      success: true,
+      message: "OTP sent successfully",
+      phone,
+      otp: { code: otp },
+    });
   } catch (err) {
-    console.error("[SEND-OTP] Controller error:", err);
-
-    return res.status(500).json({
+    console.error("Send OTP error:", err);
+    res.status(500).json({
       success: false,
       message: "Failed to send OTP",
-      error: err.message,
     });
   }
 };
 
 /* ════════════════════════════════════════════════════
-   VERIFY OTP
+   VERIFY OTP - Step 2
 ════════════════════════════════════════════════════ */
-
 exports.verifyOTP = async (req, res) => {
   try {
-    console.log("\n════════════════════════════════════════");
-    console.log("[VERIFY-OTP] API HIT");
-    console.log("[VERIFY-OTP] Body:", JSON.stringify(req.body, null, 2));
-    console.log("════════════════════════════════════════");
+    const { phone, otp } = req.body;
 
-    const phone = cleanIndianPhone(req.body.phone);
-    const otp = String(req.body.otp || "").trim();
-
+    // Validate
     if (!phone || !otp) {
       return res.status(400).json({
         success: false,
@@ -193,20 +91,7 @@ exports.verifyOTP = async (req, res) => {
       });
     }
 
-    if (!/^\d{10}$/.test(phone)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid phone number. Must be 10 digits.",
-      });
-    }
-
-    if (!/^\d{4,6}$/.test(otp)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid OTP format.",
-      });
-    }
-
+    // Find user
     const user = await LoginUser.findOne({ phone });
 
     if (!user || !user.otp) {
@@ -216,78 +101,67 @@ exports.verifyOTP = async (req, res) => {
       });
     }
 
-    if (user.status === "blocked") {
-      return res.status(403).json({
-        success: false,
-        message: "Your account is blocked. Please contact support.",
-      });
-    }
-
-    if (user.status === "inactive") {
-      return res.status(403).json({
-        success: false,
-        message: "Your account is inactive. Please contact support.",
-      });
-    }
-
-    if (new Date() > new Date(user.otp.expiresAt)) {
+    // Check OTP expiry
+    if (new Date() > user.otp.expiresAt) {
       user.otp = null;
       await user.save();
-
       return res.status(400).json({
         success: false,
         message: "OTP expired. Please request a new one.",
       });
     }
 
+    // Check max attempts
     user.otp.attempts = (user.otp.attempts || 0) + 1;
-
-    if (user.otp.attempts > MAX_OTP_ATTEMPTS) {
+    if (user.otp.attempts > 5) {
       user.otp = null;
       await user.save();
-
       return res.status(400).json({
         success: false,
         message: "Too many wrong attempts. Please request a new OTP.",
       });
     }
 
-    if (String(user.otp.code) !== otp) {
+    // Verify OTP against stored code
+    if (user.otp.code !== otp) {
       await user.save();
-
-      const remaining = Math.max(MAX_OTP_ATTEMPTS - user.otp.attempts, 0);
-
+      const remaining = 5 - user.otp.attempts;
       return res.status(400).json({
         success: false,
         message: `Invalid OTP. ${remaining} attempts remaining.`,
       });
     }
 
+    // OTP verified ✓
     user.isPhoneVerified = true;
     user.otp = null;
     user.lastLogin = new Date();
     await user.save();
 
-    const token = createToken(user);
+    // Generate JWT token
+    const token = jwt.sign(
+      {
+        userId: user._id.toString(),
+        phone: user.phone,
+      },
+      JWT_SECRET,
+      { expiresIn: JWT_EXPIRE }
+    );
 
-    console.log("[VERIFY-OTP] OTP verified successfully:", phone);
-
-    return res.status(200).json({
+    res.json({
       success: true,
       message: "OTP verified successfully",
       token,
       userId: user._id.toString(),
       phone: user.phone,
       name: user.name,
-      requiresName: !user.name,
+      requiresName: !user.name, // True if name is not set
     });
   } catch (err) {
-    console.error("[VERIFY-OTP] Error:", err);
-
-    return res.status(500).json({
+    console.error("Verify OTP error:", err);
+    res.status(500).json({
       success: false,
       message: "Failed to verify OTP",
-      error: err.message,
     });
   }
 };
@@ -295,7 +169,6 @@ exports.verifyOTP = async (req, res) => {
 /* ════════════════════════════════════════════════════
    GET USER PROFILE
 ════════════════════════════════════════════════════ */
-
 exports.getUserProfile = async (req, res) => {
   try {
     const userId = req.user?.userId;
@@ -307,7 +180,7 @@ exports.getUserProfile = async (req, res) => {
       });
     }
 
-    const user = await LoginUser.findById(userId).select("-otp");
+    const user = await LoginUser.findById(userId);
 
     if (!user) {
       return res.status(404).json({
@@ -316,17 +189,15 @@ exports.getUserProfile = async (req, res) => {
       });
     }
 
-    return res.status(200).json({
+    res.json({
       success: true,
       data: user,
     });
   } catch (err) {
-    console.error("[GET-PROFILE] Error:", err);
-
-    return res.status(500).json({
+    console.error("Get profile error:", err);
+    res.status(500).json({
       success: false,
       message: "Failed to fetch profile",
-      error: err.message,
     });
   }
 };
@@ -334,7 +205,6 @@ exports.getUserProfile = async (req, res) => {
 /* ════════════════════════════════════════════════════
    UPDATE USER NAME
 ════════════════════════════════════════════════════ */
-
 exports.updateUserName = async (req, res) => {
   try {
     const userId = req.user?.userId;
@@ -356,12 +226,9 @@ exports.updateUserName = async (req, res) => {
 
     const user = await LoginUser.findByIdAndUpdate(
       userId,
-      {
-        name: name.trim(),
-        updatedAt: new Date(),
-      },
+      { name: name.trim(), updatedAt: new Date() },
       { new: true }
-    ).select("-otp");
+    );
 
     if (!user) {
       return res.status(404).json({
@@ -370,18 +237,16 @@ exports.updateUserName = async (req, res) => {
       });
     }
 
-    return res.status(200).json({
+    res.json({
       success: true,
       message: "Name updated successfully",
       data: user,
     });
   } catch (err) {
-    console.error("[UPDATE-NAME] Error:", err);
-
-    return res.status(500).json({
+    console.error("Update name error:", err);
+    res.status(500).json({
       success: false,
       message: "Failed to update name",
-      error: err.message,
     });
   }
 };
@@ -389,29 +254,29 @@ exports.updateUserName = async (req, res) => {
 /* ════════════════════════════════════════════════════
    LOGOUT
 ════════════════════════════════════════════════════ */
-
 exports.logout = async (req, res) => {
   try {
-    return res.status(200).json({
+    // Logout is handled on frontend by clearing token
+    res.json({
       success: true,
       message: "Logged out successfully",
     });
   } catch (err) {
-    return res.status(500).json({
+    res.status(500).json({
       success: false,
       message: "Logout failed",
-      error: err.message,
     });
   }
 };
 
 /* ════════════════════════════════════════════════════
-   ADMIN: GET ALL LOGIN USERS
+   GET ALL LOGIN USERS (ADMIN)
 ════════════════════════════════════════════════════ */
-
 exports.getAllLoginUsers = async (req, res) => {
   try {
-    const users = await LoginUser.find().select("-otp").sort({ lastLogin: -1 });
+    const users = await LoginUser.find()
+      .select("-otp")
+      .sort({ lastLogin: -1 });
 
     const loginUsers = users.map((user) => ({
       _id: user._id,
@@ -425,35 +290,30 @@ exports.getAllLoginUsers = async (req, res) => {
       updatedAt: user.updatedAt,
       daysAgo: user.lastLogin
         ? Math.floor(
-          (new Date() - new Date(user.lastLogin)) /
-          (1000 * 60 * 60 * 24)
+          (new Date() - new Date(user.lastLogin)) / (1000 * 60 * 60 * 24)
         )
         : null,
     }));
 
-    return res.status(200).json({
+    res.json({
       success: true,
       data: loginUsers,
     });
   } catch (err) {
-    console.error("[GET-ALL-LOGIN-USERS] Error:", err);
-
-    return res.status(500).json({
+    console.error("Get all login users error:", err);
+    res.status(500).json({
       success: false,
       message: "Failed to fetch login users",
-      error: err.message,
     });
   }
 };
 
 /* ════════════════════════════════════════════════════
-   ADMIN: CREATE LOGIN USER
+   ADMIN: CREATE LOGIN USER (without OTP)
 ════════════════════════════════════════════════════ */
-
 exports.adminCreateUser = async (req, res) => {
   try {
-    const phone = cleanIndianPhone(req.body.phone);
-    const { name } = req.body;
+    const { phone, name } = req.body;
 
     if (!phone) {
       return res.status(400).json({
@@ -469,32 +329,31 @@ exports.adminCreateUser = async (req, res) => {
       });
     }
 
-    const existingUser = await LoginUser.findOne({ phone });
+    let user = await LoginUser.findOne({ phone });
 
-    if (existingUser) {
+    if (user) {
       return res.status(409).json({
         success: false,
         message: "User already exists with this phone",
-        data: existingUser,
+        data: user,
       });
     }
 
-    const user = await LoginUser.create({
+    user = await LoginUser.create({
       phone,
       name: name || null,
       isPhoneVerified: false,
       status: "active",
     });
 
-    return res.status(201).json({
+    res.status(201).json({
       success: true,
       message: "User created successfully",
       data: user,
     });
   } catch (err) {
-    console.error("[ADMIN-CREATE-USER] Error:", err);
-
-    return res.status(500).json({
+    console.error("Admin create user error:", err);
+    res.status(500).json({
       success: false,
       message: "Failed to create user",
       error: err.message,
@@ -505,7 +364,6 @@ exports.adminCreateUser = async (req, res) => {
 /* ════════════════════════════════════════════════════
    ADMIN: UPDATE USER STATUS
 ════════════════════════════════════════════════════ */
-
 exports.updateUserStatus = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -519,7 +377,6 @@ exports.updateUserStatus = async (req, res) => {
     }
 
     const validStatuses = ["active", "inactive", "blocked"];
-
     if (!validStatuses.includes(status)) {
       return res.status(400).json({
         success: false,
@@ -546,15 +403,14 @@ exports.updateUserStatus = async (req, res) => {
 
     console.log(`[STATUS] User ${user.phone} status changed to ${status}`);
 
-    return res.status(200).json({
+    res.json({
       success: true,
       message: `User status updated to ${status}`,
       data: user,
     });
   } catch (err) {
-    console.error("[UPDATE-USER-STATUS] Error:", err);
-
-    return res.status(500).json({
+    console.error("Update user status error:", err);
+    res.status(500).json({
       success: false,
       message: "Failed to update user status",
       error: err.message,
@@ -565,7 +421,6 @@ exports.updateUserStatus = async (req, res) => {
 /* ════════════════════════════════════════════════════
    ADMIN: DELETE USER
 ════════════════════════════════════════════════════ */
-
 exports.deleteUser = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -588,7 +443,7 @@ exports.deleteUser = async (req, res) => {
 
     console.log(`[DELETE] User ${user.phone} deleted by admin`);
 
-    return res.status(200).json({
+    res.json({
       success: true,
       message: "User deleted successfully",
       data: {
@@ -598,9 +453,8 @@ exports.deleteUser = async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("[DELETE-USER] Error:", err);
-
-    return res.status(500).json({
+    console.error("Delete user error:", err);
+    res.status(500).json({
       success: false,
       message: "Failed to delete user",
       error: err.message,

@@ -42,10 +42,20 @@ const prescriptionSchema = new mongoose.Schema(
     },
     meds: [medSchema],
 
-    // Prescription file storage
+    // Cloudinary file storage
+    prescriptionUrl: {
+      type: String,
+      description: "Cloudinary secure URL to the prescription file"
+    },
+    prescriptionPublicId: {
+      type: String,
+      description: "Cloudinary public ID for the prescription file (for deletion)"
+    },
+
+    // Deprecated: Local file storage (kept for backward compatibility)
     filePath: {
       type: String,
-      description: "Path to the uploaded prescription file (PDF/Image)"
+      description: "Path to the uploaded prescription file (PDF/Image) - deprecated, use prescriptionUrl"
     },
     fileOriginalName: {
       type: String,

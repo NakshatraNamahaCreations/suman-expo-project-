@@ -129,6 +129,7 @@ const authLoginRoutes = require("./routes/authLoginRoutes");
 const ticketRoutes = require("./routes/ticketRoutes");
 const teamMemberRoutes = require("./routes/teamMemberRoutes");
 const uploadRoutes = require("./routes/uploadRoutes");
+const cloudinaryUploadRoutes = require("./routes/cloudinaryUploadRoutes");
 const categoryRoutes = require("./routes/categoryRoutes");
 const vendorRoutes = require("./routes/vendorRoutes");
 
@@ -184,6 +185,9 @@ app.get("/health", (req, res) =>
 
 // Upload routes without auth
 app.use("/api/upload", uploadRoutes);
+
+// Cloudinary upload routes (no auth required for uploads)
+app.use("/api/cloudinary", cloudinaryUploadRoutes);
 
 // Auth middleware for protected routes
 app.use(authMiddleware);

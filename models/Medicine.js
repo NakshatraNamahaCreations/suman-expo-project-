@@ -110,7 +110,26 @@ const medicineSchema = new mongoose.Schema(
       type: String,
       enum: ["Active", "Inactive"],
       default: "Active"
-    }
+    },
+
+    /* CLOUDINARY IMAGE STORAGE */
+    imageUrl: {
+      type: String,
+      default: null
+    },
+
+    imagePublicId: {
+      type: String,
+      default: null
+    },
+
+    images: [
+      {
+        url: String,
+        publicId: String,
+        uploadedAt: { type: Date, default: Date.now }
+      }
+    ]
   },
   { timestamps: true }
 );
