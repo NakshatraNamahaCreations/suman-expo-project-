@@ -695,6 +695,7 @@ const client = new vision.ImageAnnotatorClient();
 exports.extractMedicinesFromPrescription = async (req, res) => {
   let cloudinaryPublicId = null;
   let cloudinaryUrl = null;
+  let prescriptionRecord = null;
 
   try {
     if (!req.file) {
@@ -704,11 +705,21 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
       });
     }
 
+    // Get user ID from authenticated request
+    const userId = req.user?.id || req.userId;
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "User authentication required",
+      });
+    }
+
     // Get file info from Cloudinary (multer-storage-cloudinary provides this)
     cloudinaryPublicId = req.file.filename; // Cloudinary public_id
     cloudinaryUrl = req.file.path; // Cloudinary secure URL
     const fileName = req.file.originalname;
     const mimeType = req.file.mimetype;
+    const fileSize = req.file.size;
 
     console.log(`\n📄 Processing: ${fileName}`);
     console.log(`📄 MIME Type: ${mimeType}`);
@@ -862,6 +873,25 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
     console.log(`✅ Matched ${matchedMedicines.length} medicines`);
     console.log("💊 FINAL MATCHED MEDICINES:", JSON.stringify(matchedMedicines, null, 2));
 
+    // Save prescription record with userId and Cloudinary file details
+    try {
+      const Prescription = require("../models/Prescription");
+      prescriptionRecord = new Prescription({
+        userId,
+        prescriptionUrl: cloudinaryUrl,
+        prescriptionPublicId: cloudinaryPublicId,
+        fileOriginalName: fileName,
+        fileMimetype: mimeType,
+        fileSize: fileSize,
+        uploadedAt: new Date(),
+      });
+      await prescriptionRecord.save();
+      console.log(`✅ Saved prescription record to database with ID: ${prescriptionRecord._id}`);
+    } catch (dbError) {
+      console.error("Warning: Could not save prescription to database:", dbError.message);
+      // Don't fail the extraction if database save fails
+    }
+
     // NOTE: Cloudinary file is kept for reference/history.
     // To delete after extraction, uncomment the code below:
     // try {
@@ -887,6 +917,7 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
       // Cloudinary file information
       prescriptionUrl: cloudinaryUrl,
       publicId: cloudinaryPublicId,
+      prescriptionId: prescriptionRecord?._id, // Return prescription ID for linking to orders
     });
   } catch (error) {
     console.error("❌ Prescription extraction error:", error);

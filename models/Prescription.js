@@ -23,6 +23,14 @@ const prescriptionSchema = new mongoose.Schema(
   {
     rxId: { type: String, unique: true },
 
+    // User who uploaded the prescription
+    userId: {
+      type: String,
+      required: true,
+      index: true,
+      description: "ID of the user who uploaded the prescription"
+    },
+
     doctor: String,
     start: Date,
     expiry: Date,
@@ -81,5 +89,6 @@ const prescriptionSchema = new mongoose.Schema(
 
 prescriptionSchema.index({ payStatus: 1, orderStatus: 1 });
 prescriptionSchema.index({ createdAt: -1 });
+prescriptionSchema.index({ userId: 1, createdAt: -1 }); // For fetching user prescriptions
 
 module.exports = mongoose.model("Prescription", prescriptionSchema);
