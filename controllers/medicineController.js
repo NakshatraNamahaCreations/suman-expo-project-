@@ -466,6 +466,23 @@ exports.deleteMedicine = async (req, res) => {
 
 
 /* ===============================
+   DELETE ALL MEDICINES
+================================ */
+exports.deleteAllMedicines = async (req, res) => {
+  try {
+    const result = await Medicine.deleteMany({});
+    res.json({
+      success: true,
+      message: `All medicines deleted successfully`,
+      deletedCount: result.deletedCount,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+
+/* ===============================
    ADJUST STOCK
 ================================ */
 exports.adjustStock = async (req, res) => {
