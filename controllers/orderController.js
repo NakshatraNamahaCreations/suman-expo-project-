@@ -4,6 +4,7 @@ const Address = require("../models/Address");
 const Patient = require("../models/Patient");
 const Medicine = require("../models/Medicine");
 const Prescription = require("../models/Prescription");
+const ShiprocketCtrl = require("./shiprocket.controller");
 
 
 const Razorpay = require("razorpay");
@@ -487,12 +488,34 @@ exports.createOrder = async (req, res) => {
       );
     }
 
-    // ✅ RESPONSE
-    return res.status(201).json({
+    // ✅ RESPOND FIRST — do not block client on Shiprocket
+    res.status(201).json({
       success: true,
       message: "Order created successfully",
       order,
     });
+
+    // ✅ SHIPROCKET INTEGRATION (async, non-blocking)
+    setImmediate(async () => {
+      try {
+        console.log(`[Shiprocket] Auto-creating shipment for order ${order.orderId}`);
+        await ShiprocketCtrl._doCreateShipment(order);
+        await ShiprocketCtrl._doAssignAWB(order);
+        await ShiprocketCtrl._doGeneratePickup(order);
+        console.log(`[Shiprocket] Full flow complete for order ${order.orderId}`);
+      } catch (srErr) {
+        console.error(`[Shiprocket] Auto-flow failed for order ${order.orderId}:`, srErr.message);
+        try {
+          await Order.findByIdAndUpdate(order._id, {
+            $set: { "shipping.shiprocketError": srErr.message, "shipping.currentStatus": "Shipment Pending" },
+          });
+        } catch (dbErr) {
+          console.error("[Shiprocket] Could not save error to DB:", dbErr.message);
+        }
+      }
+    });
+
+    return;
 
   } catch (error) {
     return res.status(500).json({

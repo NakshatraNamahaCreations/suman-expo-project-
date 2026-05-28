@@ -293,6 +293,35 @@ const orderSchema = new mongoose.Schema(
     },
 
     deliveredAt: Date,
+
+    /* ── Shiprocket Shipping ─────────────────────────────────────────────── */
+    shipping: {
+      provider:             { type: String, default: "Shiprocket" },
+      shiprocketOrderId:    String,
+      shiprocketShipmentId: String,
+      awbCode:              String,
+      courierCompanyId:     String,
+      courierName:          String,
+      pickupLocation:       String,
+      pickupStatus:         String,
+      currentStatus:        String,
+      trackingUrl:          String,
+      labelUrl:             String,
+      manifestUrl:          String,
+      estimatedDeliveryDate:Date,
+      lastTrackingUpdate:   Date,
+      trackingHistory: [
+        {
+          status:          String,
+          shiprocketStatus:String,
+          message:         String,
+          location:        String,
+          date:            Date,
+          rawData:         mongoose.Schema.Types.Mixed,
+        },
+      ],
+      shiprocketError: String,
+    },
   },
   { timestamps: true }
 );
@@ -303,6 +332,8 @@ orderSchema.index({ paymentStatus: 1, createdAt: -1 });
 orderSchema.index({ prescription: 1 });
 orderSchema.index({ createdAt: -1 });
 orderSchema.index({ "patientDetails.name": 1 });
+orderSchema.index({ "shipping.awbCode": 1 }, { sparse: true });
+orderSchema.index({ "shipping.shiprocketOrderId": 1 }, { sparse: true });
 
 /* ── AUTO GENERATE IDS ── */
 function generateOrderId() {

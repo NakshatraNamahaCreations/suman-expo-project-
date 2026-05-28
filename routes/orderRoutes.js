@@ -17,6 +17,8 @@ const {
   reorderOrder
 } = require("../controllers/orderController");
 
+const { getTracking } = require("../controllers/shiprocket.controller");
+
 // ADMIN: CREATE ORDER DIRECTLY (patient + medicines + address in one shot)
 router.post("/admin-create", createAdminOrder);
 
@@ -48,6 +50,9 @@ router.get("/user/:userId", async (req, res) => {
 
 // REORDER: Create new order from existing order (before /:id to avoid shadowing)
 router.post("/:id/reorder", reorderOrder);
+
+// TRACKING (must be before /:id)
+router.get("/:orderId/tracking", getTracking);
 
 // GET SINGLE ORDER
 router.get("/:id", getOrderById);

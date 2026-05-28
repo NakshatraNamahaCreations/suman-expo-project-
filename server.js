@@ -133,6 +133,7 @@ const cloudinaryUploadRoutes = require("./routes/cloudinaryUploadRoutes");
 const categoryRoutes = require("./routes/categoryRoutes");
 const vendorRoutes = require("./routes/vendorRoutes");
 const userPrescriptionRoutes = require("./routes/userPrescriptionRoutes");
+const shiprocketRoutes       = require("./routes/shiprocket.routes");
 
 const { authMiddleware } = require("./middleware/auth");
 
@@ -193,6 +194,9 @@ app.use("/api/cloudinary", cloudinaryUploadRoutes);
 // User prescription file routes (no auth required — mobile users not admin-authed)
 app.use("/api/user-prescriptions", userPrescriptionRoutes);
 
+// Shiprocket webhook — no auth (Shiprocket calls this endpoint directly)
+app.post("/api/shiprocket/webhook", require("./controllers/shiprocket.controller").webhook);
+
 // Auth middleware for protected routes
 app.use(authMiddleware);
 
@@ -212,6 +216,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/auth-login", authLoginRoutes);
 app.use("/api/tickets", ticketRoutes);
 app.use("/api/team-members", teamMemberRoutes);
+app.use("/api/shiprocket", shiprocketRoutes);
 
 app.get("/", (req, res) => {
   res.send("RG Medlink API Running");
