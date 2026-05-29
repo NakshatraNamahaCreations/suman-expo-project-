@@ -12,6 +12,17 @@ const userPrescriptionFileSchema = new mongoose.Schema(
       index: true,
     },
 
+    /* Patient link — null for older uploads without patient selection */
+    patientId: {
+      type: String,
+      default: null,
+      index: true,
+    },
+    patientName: {
+      type: String,
+      default: "",
+    },
+
     /* Cloudinary details */
     cloudinaryUrl: {
       type: String,

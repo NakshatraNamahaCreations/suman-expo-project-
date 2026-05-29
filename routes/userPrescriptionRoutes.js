@@ -55,7 +55,7 @@ router.post(
   },
   async (req, res) => {
     try {
-      const { userId } = req.body;
+      const { userId, patientId, patientName } = req.body;
 
       if (!userId) {
         // Clean up uploaded file from Cloudinary
@@ -79,6 +79,8 @@ router.post(
 
       const doc = await UserPrescriptionFile.create({
         userId,
+        patientId: patientId || null,
+        patientName: patientName || "",
         cloudinaryUrl,
         publicId,
         fileType,
@@ -93,6 +95,8 @@ router.post(
         data: {
           _id: doc._id,
           userId: doc.userId,
+          patientId: doc.patientId,
+          patientName: doc.patientName,
           cloudinaryUrl: doc.cloudinaryUrl,
           publicId: doc.publicId,
           fileType: doc.fileType,
