@@ -281,30 +281,19 @@ exports.bulkSaveMedicines = async (req, res) => {
       }
 
       if (id) {
-        const updatedData = {
-          ...cleanData,
-          normalizedName: cleanData.description
-            ?.toLowerCase()
-            .replace(/\s+/g, " ")
-            .trim()
-        };
-
-        await Medicine.findByIdAndUpdate(id, updatedData);
+        // Explicit ID supplied — update that specific record
+        await Medicine.findByIdAndUpdate(id, cleanData);
         updated++;
       } else {
-        const normalizedName = cleanData.description
-          ?.toLowerCase()
+        // Always insert a new record — duplicate descriptions are intentionally allowed.
+        // Pre-set a unique normalizedName so any residual DB unique index cannot block the insert.
+        const baseNorm = (cleanData.description || "")
+          .toLowerCase()
           .replace(/\s+/g, " ")
           .trim();
+        cleanData.normalizedName = `${baseNorm}_${Date.now()}_${created}`;
 
-        await Medicine.findOneAndUpdate(
-          { normalizedName },
-          {
-            ...cleanData,
-            normalizedName
-          },
-          { upsert: true, new: true }
-        );
+        await Medicine.create(cleanData);
         created++;
       }
     }

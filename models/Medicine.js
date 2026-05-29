@@ -96,13 +96,12 @@ const medicineSchema = new mongoose.Schema(
       default: ""
     },
 
-    /* SEARCH & UNIQUENESS */
+    /* SEARCH — no longer unique; duplicate medicines are allowed */
     normalizedName: {
       type: String,
       lowercase: true,
       trim: true,
       index: true,
-      unique: true
     },
 
     /* STATUS */
@@ -157,7 +156,9 @@ medicineSchema.virtual("profitMargin").get(function () {
    PRE-SAVE HOOK
 ================================ */
 medicineSchema.pre("save", function () {
-  if (this.description) {
+  // Only auto-set normalizedName when it hasn't been provided already.
+  // Bulk-save supplies its own unique normalizedName to allow duplicate descriptions.
+  if (this.description && !this.normalizedName) {
     this.normalizedName = this.description
       .toLowerCase()
       .trim()
