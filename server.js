@@ -133,7 +133,7 @@ const cloudinaryUploadRoutes = require("./routes/cloudinaryUploadRoutes");
 const categoryRoutes = require("./routes/categoryRoutes");
 const vendorRoutes = require("./routes/vendorRoutes");
 const userPrescriptionRoutes = require("./routes/userPrescriptionRoutes");
-const shiprocketRoutes       = require("./routes/shiprocket.routes");
+const shiprocketRoutes = require("./routes/shiprocket.routes");
 
 const { authMiddleware } = require("./middleware/auth");
 
@@ -161,7 +161,7 @@ app.use(
       "https://rgmedlinkadminpanel.netlify.app",
       "https://rgmedlinkadmipanel.netlify.app",
       "https://adorable-selkie-b5b2c0.netlify.app",
-      "https://bucolic-rolypoly-f7eb39.netlify.app",
+      "https://merry-snickerdoodle-fe449f.netlify.app",
       /\.rgmedlink\.com$/,
       /\.onrender\.com$/,
       /\.vercel\.app$/,
