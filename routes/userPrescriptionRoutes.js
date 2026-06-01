@@ -118,6 +118,31 @@ router.post(
 );
 
 /* ══════════════════════════════════════════════════════════════
+   PATCH /api/user-prescriptions/:id/patient
+   Attach a patientId to an existing prescription file.
+   Body: { patientId: string, patientName?: string }
+══════════════════════════════════════════════════════════════ */
+router.patch("/:id/patient", async (req, res) => {
+  try {
+    const { patientId, patientName } = req.body;
+    if (!patientId) {
+      return res.status(400).json({ success: false, message: "patientId is required" });
+    }
+    const doc = await UserPrescriptionFile.findByIdAndUpdate(
+      req.params.id,
+      { patientId, ...(patientName ? { patientName } : {}) },
+      { new: true }
+    );
+    if (!doc) {
+      return res.status(404).json({ success: false, message: "Prescription file not found" });
+    }
+    return res.json({ success: true, data: doc });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/* ══════════════════════════════════════════════════════════════
    DELETE /api/user-prescriptions/:id
    Delete a prescription file by its DB document ID.
 ══════════════════════════════════════════════════════════════ */
