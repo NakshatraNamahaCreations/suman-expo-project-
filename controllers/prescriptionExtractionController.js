@@ -697,7 +697,7 @@ const client = new vision.ImageAnnotatorClient();
  * Save prescription file info to UserPrescriptionFile collection.
  * Called only when extraction succeeds and userId is provided.
  */
-async function saveUserPrescriptionFile({ userId, cloudinaryUrl, publicId, mimeType, fileName, fileSize }) {
+async function saveUserPrescriptionFile({ userId, patientId, cloudinaryUrl, publicId, mimeType, fileName, fileSize }) {
   try {
     const fileType = mimeType?.includes("pdf")
       ? "pdf"
@@ -707,6 +707,7 @@ async function saveUserPrescriptionFile({ userId, cloudinaryUrl, publicId, mimeT
 
     const doc = await UserPrescriptionFile.create({
       userId,
+      patientId: patientId || null,
       cloudinaryUrl,
       publicId,
       fileType,
@@ -741,8 +742,9 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
     const fileName = req.file.originalname;
     const mimeType = req.file.mimetype;
     const fileSize = req.file.size || 0;
-    // Optional userId — when provided the file is saved to the user's prescription library
-    const userId = req.body?.userId || null;
+    // Optional userId & patientId — when provided the file is saved to the user's prescription library
+    const userId    = req.body?.userId    || null;
+    const patientId = req.body?.patientId || null;
 
     console.log(`\n📄 Processing: ${fileName}`);
     console.log(`📄 MIME Type: ${mimeType}`);
@@ -841,7 +843,7 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
       let savedFileOnNoText = null;
       if (userId) {
         savedFileOnNoText = await saveUserPrescriptionFile({
-          userId, cloudinaryUrl, publicId: cloudinaryPublicId,
+          userId, patientId, cloudinaryUrl, publicId: cloudinaryPublicId,
           mimeType, fileName, fileSize,
         });
         console.log("📁 Saved prescription file to user library (no text found)");
@@ -892,7 +894,7 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
       let savedFileOnNoMeds = null;
       if (userId) {
         savedFileOnNoMeds = await saveUserPrescriptionFile({
-          userId, cloudinaryUrl, publicId: cloudinaryPublicId,
+          userId, patientId, cloudinaryUrl, publicId: cloudinaryPublicId,
           mimeType, fileName, fileSize,
         });
         console.log("📁 Saved prescription file to user library (no medicines found)");
@@ -941,6 +943,7 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
     if (userId) {
       savedPrescriptionFile = await saveUserPrescriptionFile({
         userId,
+        patientId,
         cloudinaryUrl,
         publicId: cloudinaryPublicId,
         mimeType,
