@@ -271,9 +271,35 @@ exports.generatePaymentLink = async (req, res) => {
       return res.status(400).json({ success: false, message: "Order is already paid" });
     }
 
-    // Re-use existing link if still valid
-    if (order.razorpayPaymentLinkUrl) {
-      return res.json({ success: true, paymentLinkUrl: order.razorpayPaymentLinkUrl, paymentLinkId: order.razorpayPaymentLinkId });
+    // If a link was previously generated, verify its current status with Razorpay
+    // before reusing it — it may have been paid in a previous session.
+    if (order.razorpayPaymentLinkId && order.razorpayPaymentLinkUrl) {
+      try {
+        const existingLink = await razorpay.paymentLink.fetch(order.razorpayPaymentLinkId);
+
+        if (existingLink.status === "paid") {
+          // Link was paid in a previous session — sync the order now
+          order.paymentStatus = "Paid";
+          order.paymentDate   = new Date();
+          const capPayment = (existingLink.payments || []).find(p => p.status === "captured");
+          if (capPayment?.payment_id) order.razorpayPaymentId = capPayment.payment_id;
+          await order.save();
+          return res.status(400).json({ success: false, message: "This order was already paid. Payment status has been updated." });
+        }
+
+        if (existingLink.status === "created" || existingLink.status === "partially_paid") {
+          // Link is still active — safe to reuse
+          return res.json({ success: true, paymentLinkUrl: order.razorpayPaymentLinkUrl, paymentLinkId: order.razorpayPaymentLinkId });
+        }
+
+        // Link is expired/cancelled — fall through to create a fresh one
+        order.razorpayPaymentLinkId  = null;
+        order.razorpayPaymentLinkUrl = null;
+      } catch (fetchErr) {
+        console.warn("⚠️ Could not verify existing payment link, creating a new one:", fetchErr.message);
+        order.razorpayPaymentLinkId  = null;
+        order.razorpayPaymentLinkUrl = null;
+      }
     }
 
     const paymentLink = await razorpay.paymentLink.create({
@@ -359,19 +385,27 @@ exports.checkPaymentStatus = async (req, res) => {
     // Ask Razorpay for the current payment link status
     const link = await razorpay.paymentLink.fetch(order.razorpayPaymentLinkId);
 
-    if (link.status === "paid") {
-      // Extract the payment ID from the first successful payment on the link
-      const payments = link.payments || [];
-      const paidPayment = payments.find(p => p.status === "captured");
-      const razorpayPaymentId = paidPayment?.payment_id || null;
+    console.log(`🔍 checkPaymentStatus for ${order.orderId}: link.status=${link.status}, amount=${link.amount}, amount_paid=${link.amount_paid}`);
 
+    // Require ALL of: status=paid, full amount received, at least one captured payment
+    const statusPaid    = link.status === "paid";
+    const amountCleared = Number(link.amount_paid) > 0 && Number(link.amount_paid) >= Number(link.amount);
+    const payments      = Array.isArray(link.payments) ? link.payments : (link.payments ? Object.values(link.payments) : []);
+    const capturedPay   = payments.find(p => p.status === "captured");
+
+    if (statusPaid && amountCleared && capturedPay) {
       order.paymentStatus   = "Paid";
       order.paymentDate     = new Date();
-      if (razorpayPaymentId) order.razorpayPaymentId = razorpayPaymentId;
+      if (capturedPay.payment_id) order.razorpayPaymentId = capturedPay.payment_id;
       await order.save();
 
-      console.log(`✅ checkPaymentStatus: order ${order.orderId} marked Paid via Razorpay polling`);
+      console.log(`✅ checkPaymentStatus: order ${order.orderId} marked Paid (payment_id=${capturedPay.payment_id})`);
       return res.json({ success: true, paymentStatus: "Paid", updated: true });
+    }
+
+    // Log why it didn't qualify — helps catch false-positives
+    if (statusPaid && (!amountCleared || !capturedPay)) {
+      console.warn(`⚠️ checkPaymentStatus: link.status=paid but validation failed — amountCleared=${amountCleared}, capturedPay=${!!capturedPay}`);
     }
 
     return res.json({ success: true, paymentStatus: order.paymentStatus, updated: false });
