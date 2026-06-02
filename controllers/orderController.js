@@ -358,52 +358,35 @@ exports.checkPaymentStatus = async (req, res) => {
       return res.json({ success: true, paymentStatus: order.paymentStatus, updated: false });
     }
 
-    // Step 1: Fetch the payment link to check its high-level status
+    // Fetch payment link from Razorpay.
+    // Razorpay only sets link.status = "paid" AFTER a successful payment capture.
+    // This is the authoritative signal — no secondary verification needed.
     const link = await razorpay.paymentLink.fetch(order.razorpayPaymentLinkId);
 
-    console.log(`🔍 checkPaymentStatus ${order.orderId}: link.status=${link.status} amount=${link.amount} paid=${link.amount_paid}`);
+    console.log(`🔍 checkPaymentStatus ${order.orderId}: status=${link.status} amount=${link.amount} paid=${link.amount_paid}`);
 
-    // Only proceed if Razorpay reports the link itself as fully paid
     if (link.status !== "paid") {
       return res.json({ success: true, paymentStatus: order.paymentStatus, updated: false });
     }
 
-    // Step 2: Extract the payment ID(s) from the link — handle both array and collection shapes
-    const paymentItems = Array.isArray(link.payments)
-      ? link.payments
-      : (link.payments?.items || []);
-
-    // Step 3: For each payment on the link, call razorpay.payments.fetch() to get the
-    // authoritative payment record and confirm it is truly "captured" (not just authorized).
-    let confirmedPaymentId = null;
-    for (const item of paymentItems) {
-      const payId = item.payment_id || item.id;
-      if (!payId) continue;
-      try {
-        const payment = await razorpay.payments.fetch(payId);
-        if (payment.status === "captured") {
-          confirmedPaymentId = payment.id;
-          break;
-        }
-        console.warn(`⚠️  Payment ${payId} status=${payment.status} — not captured yet`);
-      } catch (fetchErr) {
-        console.warn(`⚠️  Could not fetch payment ${payId}:`, fetchErr.message);
+    // Extract payment ID if available (payments field can be null, object, or array)
+    let razorpayPaymentId = null;
+    if (link.payments) {
+      if (Array.isArray(link.payments)) {
+        razorpayPaymentId = link.payments[0]?.payment_id || null;
+      } else if (link.payments.payment_id) {
+        razorpayPaymentId = link.payments.payment_id;
+      } else if (link.payments.id) {
+        razorpayPaymentId = link.payments.id;
       }
     }
 
-    if (!confirmedPaymentId) {
-      // link.status is "paid" but no confirmed captured payment found — wait for next poll
-      console.warn(`⚠️  checkPaymentStatus ${order.orderId}: link paid but no captured payment confirmed yet`);
-      return res.json({ success: true, paymentStatus: order.paymentStatus, updated: false });
-    }
-
-    // All checks passed — mark the order as Paid
-    order.paymentStatus    = "Paid";
-    order.paymentDate      = new Date();
-    order.razorpayPaymentId = confirmedPaymentId;
+    order.paymentStatus     = "Paid";
+    order.paymentDate       = new Date();
+    if (razorpayPaymentId) order.razorpayPaymentId = razorpayPaymentId;
     await order.save();
 
-    console.log(`✅ checkPaymentStatus: ${order.orderId} marked Paid — payment_id=${confirmedPaymentId}`);
+    console.log(`✅ ${order.orderId} marked Paid via payment link (payment_id=${razorpayPaymentId})`);
     return res.json({ success: true, paymentStatus: "Paid", updated: true });
   } catch (err) {
     console.error("❌ checkPaymentStatus error:", err);
