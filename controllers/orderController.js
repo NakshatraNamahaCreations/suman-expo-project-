@@ -335,6 +335,52 @@ exports.razorpayWebhook = async (req, res) => {
   }
 };
 
+/* ─────────────────────────────────────────────────────────────
+   GET /orders/:id/check-payment
+   Actively fetches the payment link status from Razorpay and
+   updates the order if paid. Called by the admin panel every 5s
+   while the QR modal is open — no webhook config needed.
+───────────────────────────────────────────────────────────── */
+exports.checkPaymentStatus = async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+
+    // Already paid — nothing to do
+    if (order.paymentStatus === "Paid") {
+      return res.json({ success: true, paymentStatus: "Paid", updated: false });
+    }
+
+    // No payment link yet
+    if (!order.razorpayPaymentLinkId) {
+      return res.json({ success: true, paymentStatus: order.paymentStatus, updated: false });
+    }
+
+    // Ask Razorpay for the current payment link status
+    const link = await razorpay.paymentLink.fetch(order.razorpayPaymentLinkId);
+
+    if (link.status === "paid") {
+      // Extract the payment ID from the first successful payment on the link
+      const payments = link.payments || [];
+      const paidPayment = payments.find(p => p.status === "captured");
+      const razorpayPaymentId = paidPayment?.payment_id || null;
+
+      order.paymentStatus   = "Paid";
+      order.paymentDate     = new Date();
+      if (razorpayPaymentId) order.razorpayPaymentId = razorpayPaymentId;
+      await order.save();
+
+      console.log(`✅ checkPaymentStatus: order ${order.orderId} marked Paid via Razorpay polling`);
+      return res.json({ success: true, paymentStatus: "Paid", updated: true });
+    }
+
+    return res.json({ success: true, paymentStatus: order.paymentStatus, updated: false });
+  } catch (err) {
+    console.error("❌ checkPaymentStatus error:", err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+};
+
 /* ── pagination helper ───────────────────────────────────────── */
 function paginate(query) {
   const page = Math.max(1, parseInt(query.page) || 1);

@@ -17,6 +17,7 @@ const {
   reorderOrder,
   generatePaymentLink,
   razorpayWebhook,
+  checkPaymentStatus,
 } = require("../controllers/orderController");
 
 const { getTracking } = require("../controllers/shiprocket.controller");
@@ -57,6 +58,9 @@ router.post("/:id/reorder", reorderOrder);
 
 // GENERATE PAYMENT LINK for admin-initiated customer payment
 router.post("/:id/generate-payment-link", generatePaymentLink);
+
+// CHECK PAYMENT LINK STATUS with Razorpay (no webhook needed)
+router.get("/:id/check-payment", checkPaymentStatus);
 
 // TRACKING (must be before /:id)
 router.get("/:orderId/tracking", getTracking);
