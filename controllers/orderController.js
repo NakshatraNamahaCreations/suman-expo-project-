@@ -277,13 +277,21 @@ exports.generatePaymentLink = async (req, res) => {
       try { await razorpay.paymentLink.cancel(order.razorpayPaymentLinkId); } catch (_) {}
     }
 
-    // Always create a fresh link. Status updates ONLY happen through checkPaymentStatus
-    // polling — never inside this function — so the admin always sees a clean starting state.
+    // Validate amount — Razorpay minimum is ₹1 (100 paise)
+    const amountPaise = Math.round((order.totalAmount || 0) * 100);
+    if (amountPaise < 100) {
+      return res.status(400).json({ success: false, message: `Order amount ₹${order.totalAmount || 0} is too low to generate a payment link (minimum ₹1)` });
+    }
+
+    // Always create a fresh link. reference_id must be unique per Razorpay link, so
+    // we append a timestamp to avoid "reference_id already exists" errors on re-generation.
+    const referenceId = `${order.orderId}-${Date.now()}`.slice(0, 40);
+
     const paymentLink = await razorpay.paymentLink.create({
-      amount: Math.round((order.totalAmount || 0) * 100),
+      amount: amountPaise,
       currency: "INR",
       description: `Payment for Order ${order.orderId}`,
-      reference_id: order.orderId,
+      reference_id: referenceId,
       notify: { sms: false, email: false },
       reminder_enable: false,
     });
@@ -295,8 +303,9 @@ exports.generatePaymentLink = async (req, res) => {
     console.log(`🔗 New payment link created for ${order.orderId}: ${paymentLink.id}`);
     return res.json({ success: true, paymentLinkUrl: paymentLink.short_url, paymentLinkId: paymentLink.id });
   } catch (err) {
-    console.error("❌ generatePaymentLink error:", err);
-    return res.status(500).json({ success: false, message: "Failed to generate payment link", error: err.message });
+    const detail = err?.error?.description || err?.message || "Unknown error";
+    console.error("❌ generatePaymentLink error:", detail, err);
+    return res.status(500).json({ success: false, message: `Failed to generate payment link: ${detail}` });
   }
 };
 
