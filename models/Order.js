@@ -261,6 +261,10 @@ const orderSchema = new mongoose.Schema(
       type: String,
     },
 
+    // Payment Link (admin-generated for customer payment)
+    razorpayPaymentLinkId:  { type: String },
+    razorpayPaymentLinkUrl: { type: String },
+
     // 🔥 PAYMENT STATUS
     paymentStatus: {
       type: String,

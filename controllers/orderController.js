@@ -258,6 +258,83 @@ exports.verifyRazorpayPayment = async (req, res) => {
   }
 };
 
+/* ─────────────────────────────────────────────────────────────
+   POST /orders/:id/generate-payment-link
+   Admin generates a Razorpay Payment Link for an order so the
+   customer can pay via QR code or the short URL.
+───────────────────────────────────────────────────────────── */
+exports.generatePaymentLink = async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+    if (order.paymentStatus === "Paid") {
+      return res.status(400).json({ success: false, message: "Order is already paid" });
+    }
+
+    // Re-use existing link if still valid
+    if (order.razorpayPaymentLinkUrl) {
+      return res.json({ success: true, paymentLinkUrl: order.razorpayPaymentLinkUrl, paymentLinkId: order.razorpayPaymentLinkId });
+    }
+
+    const paymentLink = await razorpay.paymentLink.create({
+      amount: Math.round((order.totalAmount || 0) * 100), // paise
+      currency: "INR",
+      description: `Payment for Order ${order.orderId}`,
+      reference_id: order.orderId,
+      notify: { sms: false, email: false },
+      reminder_enable: false,
+    });
+
+    order.razorpayPaymentLinkId  = paymentLink.id;
+    order.razorpayPaymentLinkUrl = paymentLink.short_url;
+    await order.save();
+
+    return res.json({ success: true, paymentLinkUrl: paymentLink.short_url, paymentLinkId: paymentLink.id });
+  } catch (err) {
+    console.error("❌ generatePaymentLink error:", err);
+    return res.status(500).json({ success: false, message: "Failed to generate payment link", error: err.message });
+  }
+};
+
+/* ─────────────────────────────────────────────────────────────
+   POST /orders/razorpay-webhook
+   Razorpay calls this when a Payment Link is paid.
+   Configure the webhook URL in Razorpay Dashboard:
+     https://<backend-url>/api/orders/razorpay-webhook
+   Events to enable: payment_link.paid
+───────────────────────────────────────────────────────────── */
+exports.razorpayWebhook = async (req, res) => {
+  try {
+    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+    if (webhookSecret) {
+      const signature = req.headers["x-razorpay-signature"];
+      const expectedSig = crypto
+        .createHmac("sha256", webhookSecret)
+        .update(req.rawBody || JSON.stringify(req.body))
+        .digest("hex");
+      if (signature !== expectedSig) {
+        return res.status(400).json({ success: false, message: "Invalid webhook signature" });
+      }
+    }
+
+    const event = req.body?.event;
+    const entity = req.body?.payload?.payment_link?.entity;
+
+    if (event === "payment_link.paid" && entity?.id) {
+      await Order.findOneAndUpdate(
+        { razorpayPaymentLinkId: entity.id },
+        { paymentStatus: "Paid", paymentDate: new Date(), razorpayPaymentId: entity.payments?.[0]?.payment?.entity?.id || null }
+      );
+      console.log("✅ Webhook: payment_link.paid for", entity.id);
+    }
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error("❌ Razorpay webhook error:", err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+};
+
 /* ── pagination helper ───────────────────────────────────────── */
 function paginate(query) {
   const page = Math.max(1, parseInt(query.page) || 1);

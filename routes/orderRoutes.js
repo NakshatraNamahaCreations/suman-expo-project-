@@ -14,7 +14,9 @@ const {
   createRazorpayOrder,
   verifyRazorpayPayment,
   updatePaymentStatus,
-  reorderOrder
+  reorderOrder,
+  generatePaymentLink,
+  razorpayWebhook,
 } = require("../controllers/orderController");
 
 const { getTracking } = require("../controllers/shiprocket.controller");
@@ -22,6 +24,8 @@ const { getTracking } = require("../controllers/shiprocket.controller");
 // ADMIN: CREATE ORDER DIRECTLY (patient + medicines + address in one shot)
 router.post("/admin-create", createAdminOrder);
 
+// RAZORPAY WEBHOOK — must be registered BEFORE /:id routes
+router.post("/razorpay-webhook", razorpayWebhook);
 
 router.post("/create-razorpay-order", createRazorpayOrder);
 router.post("/verify-payment", verifyRazorpayPayment);
@@ -50,6 +54,9 @@ router.get("/user/:userId", async (req, res) => {
 
 // REORDER: Create new order from existing order (before /:id to avoid shadowing)
 router.post("/:id/reorder", reorderOrder);
+
+// GENERATE PAYMENT LINK for admin-initiated customer payment
+router.post("/:id/generate-payment-link", generatePaymentLink);
 
 // TRACKING (must be before /:id)
 router.get("/:orderId/tracking", getTracking);

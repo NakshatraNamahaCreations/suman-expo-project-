@@ -173,8 +173,8 @@ app.use(
   })
 );
 
-// Body parsing
-app.use(express.json({ limit: "50mb" }));
+// Body parsing — store raw body so Razorpay webhook can verify its signature
+app.use(express.json({ limit: "50mb", verify: (req, _res, buf) => { req.rawBody = buf.toString(); } }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
 // Static upload files
