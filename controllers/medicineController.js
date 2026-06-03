@@ -345,8 +345,8 @@ exports.getMedicines = async (req, res) => {
     const hasPageParams = req.query.page || req.query.limit;
 
     if (!hasPageParams) {
-      // Legacy: return raw array for backward compat (mobile app, dashboard)
-      const medicines = await Medicine.find().sort({ createdAt: -1 });
+      // Return ALL medicines — no qty/status filter — zero-stock medicines must show in admin Inventory
+      const medicines = await Medicine.find({}).sort({ createdAt: -1 });
       return res.json(medicines);
     }
 
