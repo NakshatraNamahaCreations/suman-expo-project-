@@ -134,6 +134,7 @@ const categoryRoutes = require("./routes/categoryRoutes");
 const vendorRoutes = require("./routes/vendorRoutes");
 const userPrescriptionRoutes = require("./routes/userPrescriptionRoutes");
 const shiprocketRoutes = require("./routes/shiprocket.routes");
+const bannerRoutes = require("./routes/bannerRoutes");
 
 const { authMiddleware } = require("./middleware/auth");
 
@@ -193,6 +194,9 @@ app.use("/api/cloudinary", cloudinaryUploadRoutes);
 
 // User prescription file routes (no auth required — mobile users not admin-authed)
 app.use("/api/user-prescriptions", userPrescriptionRoutes);
+
+// Banner routes — GET is public (mobile app), upload/delete protected by admin panel session
+app.use("/api/banners", bannerRoutes);
 
 // Shiprocket webhook — no auth (Shiprocket calls this endpoint directly)
 app.post("/api/shiprocket/webhook", require("./controllers/shiprocket.controller").webhook);
