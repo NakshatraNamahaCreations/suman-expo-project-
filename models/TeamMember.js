@@ -47,6 +47,7 @@ const teamMemberSchema = new mongoose.Schema(
         "tickets",
         "team-members",
         "login-users",
+        "banner-management",
       ],
     },
     status: {
