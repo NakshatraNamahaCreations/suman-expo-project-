@@ -59,6 +59,55 @@ router.post("/:id/reorder", reorderOrder);
 // GENERATE PAYMENT LINK for admin-initiated customer payment
 router.post("/:id/generate-payment-link", generatePaymentLink);
 
+// DELETE WITH LOG — PATCH so body (remark) is reliably received
+router.patch("/:id/delete-with-log", async (req, res) => {
+  try {
+    const Order    = require("../models/Order");
+    const OrderLog = require("../models/OrderLog");
+
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+
+    const remark    = req.body?.remark    ? String(req.body.remark)    : "";
+    const deletedBy = req.body?.deletedBy ? String(req.body.deletedBy) : "Admin";
+
+    // Create the log
+    await OrderLog.create({
+      orderId:       order.orderId       || "",
+      orderDbId:     order._id.toString(),
+      customerName:  order.patientDetails?.name         || "",
+      patientName:   order.patientDetails?.name         || "",
+      mobileNumber:  order.patientDetails?.primaryPhone || order.patientDetails?.phone || order.userId || "",
+      totalAmount:   order.totalAmount   || 0,
+      orderStatus:   order.orderStatus   || "",
+      paymentStatus: order.paymentStatus || "",
+      remark,
+      deletedBy,
+      deletedAt: new Date(),
+      snapshot: {
+        orderId:        order.orderId,
+        totalAmount:    order.totalAmount,
+        orderStatus:    order.orderStatus,
+        paymentStatus:  order.paymentStatus,
+        patientDetails: order.patientDetails,
+        deliveryAddress: order.deliveryAddress,
+        items: (order.items || []).map(i => ({ name: i.name, qty: i.qty, price: i.price })),
+        createdAt: order.createdAt,
+      },
+    });
+
+    // Soft-delete the order
+    order.isDeleted = true;
+    await order.save();
+
+    console.log(`✅ delete-with-log: ${order.orderId} | remark: "${remark}"`);
+    res.json({ success: true, message: "Order deleted and logged successfully" });
+  } catch (err) {
+    console.error("❌ delete-with-log error:", err.message);
+    res.status(500).json({ success: false, message: "Delete failed", error: err.message });
+  }
+});
+
 // CHECK PAYMENT LINK STATUS with Razorpay (no webhook needed)
 router.get("/:id/check-payment", checkPaymentStatus);
 
