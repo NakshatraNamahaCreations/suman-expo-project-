@@ -1067,6 +1067,32 @@ function cleanDurationLabel(value = "") {
   return result;
 }
 
+/**
+ * Extract the explicit Qty number written in the prescription Qty column.
+ * Prescriptions typically print: "6 Month(s) 180" where 180 is the Qty.
+ */
+function extractPrescriptionQty(block = "") {
+  const text = String(block);
+
+  // Pattern: number directly after duration — "6 Month(s) 180" or "15 Day(s) 15"
+  const afterDuration = text.match(
+    /(?:\d+\s*(?:month|months|month\(s\)|day|days|day\(s\)|week|weeks|week\(s\)))\s+(\d{1,4})\b/i
+  );
+  if (afterDuration) {
+    const qty = parseInt(afterDuration[1], 10);
+    if (qty > 0 && qty <= 9999) return qty;
+  }
+
+  // Fallback: last standalone 2-4 digit number in the block
+  const allNums = [...text.matchAll(/\b(\d{2,4})\b/g)];
+  if (allNums.length > 0) {
+    const last = parseInt(allNums[allNums.length - 1][1], 10);
+    if (last >= 10 && last <= 9999) return last;
+  }
+
+  return null;
+}
+
 function getDurationDays(durationText = "") {
   if (!durationText) return 0;
 
@@ -1184,6 +1210,7 @@ function extractMedicineRowsFromPrescription(text) {
     const instruction = extractInstructionFromBlock(block);
     const durationLabel = extractDurationFromBlock(block, nextLines);
     const durationDays = getDurationDays(durationLabel);
+    const prescriptionQty = extractPrescriptionQty(block);
 
     if (!medicineName || medicineName.length < 3) continue;
 
@@ -1202,6 +1229,9 @@ function extractMedicineRowsFromPrescription(text) {
 
       // original text from prescription
       durationLabel: durationLabel || "",
+
+      // Qty as explicitly written in the prescription Qty column
+      prescriptionQty: prescriptionQty || null,
     };
 
     medicines.push(row);
@@ -1385,6 +1415,9 @@ async function matchMedicinesWithDatabase(extractedMedicines) {
 
           // Original OCR duration text
           durationLabel: ocrMed.durationLabel || "",
+
+          // Qty directly from the prescription's Qty column (null if not found)
+          prescriptionQty: ocrMed.prescriptionQty || null,
 
           ocrMedicineName: ocrName,
           matchScore: bestScore,
