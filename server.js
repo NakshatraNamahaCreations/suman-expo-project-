@@ -137,6 +137,7 @@ const shiprocketRoutes = require("./routes/shiprocket.routes");
 const bannerRoutes = require("./routes/bannerRoutes");
 const orderLogRoutes   = require("./routes/orderLogRoutes");
 const patientLogRoutes = require("./routes/patientLogRoutes");
+const reviewRoutes     = require("./routes/reviewRoutes");
 
 const { authMiddleware } = require("./middleware/auth");
 
@@ -216,6 +217,7 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/order-logs",   orderLogRoutes);
 app.use("/api/patient-logs", patientLogRoutes);
+app.use("/api/reviews",     reviewRoutes);     // public GET + admin CRUD
 app.use("/api/reports", reportRoutes);
 app.use("/api/address", addressRoutes);
 app.use("/api/patient-details", patientDetailsRoutes);
