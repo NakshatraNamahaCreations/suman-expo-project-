@@ -202,19 +202,27 @@ exports.getInventoryReport = async (req, res) => {
 exports.getCAReport = async (req, res) => {
   try {
     const orders = await Order.find()
-      .populate("patient", "name phone")
       .sort({ createdAt: -1 })
-      .select("orderId totalAmount paymentStatus paymentDate orderStatus patient createdAt")
+      .select("orderId totalAmount paymentStatus paymentDate orderStatus patientDetails userId createdAt")
       .lean();
 
-    const caData = orders.map((order, index) => ({
+    const caData = orders.map((order) => ({
       transactionId: `TXN-${order._id.toString().slice(-10).toUpperCase()}`,
       orderId: order.orderId || "N/A",
       amount: order.totalAmount || 0,
       paymentStatus: order.paymentStatus || "Pending",
-      paymentDate: order.paymentDate ? new Date(order.paymentDate).toISOString().split("T")[0] : order.createdAt ? new Date(order.createdAt).toISOString().split("T")[0] : "N/A",
-      patientName: order.patient?.name || "Unknown",
-      mobileNumber: order.patient?.phone || "N/A",
+      paymentDate: order.paymentDate
+        ? new Date(order.paymentDate).toISOString().split("T")[0]
+        : order.createdAt
+          ? new Date(order.createdAt).toISOString().split("T")[0]
+          : "N/A",
+      patientName: order.patientDetails?.name || "Unknown",
+      // Phone stored in patientDetails embedded object
+      mobileNumber:
+        order.patientDetails?.primaryPhone ||
+        order.patientDetails?.phone ||
+        order.userId ||
+        "N/A",
       orderStatus: order.orderStatus || "Created",
     }));
 
