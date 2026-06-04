@@ -47,7 +47,14 @@ const ticketSchema = new mongoose.Schema({
 
   category: {
     type: String,
-    enum: ["General", "Order Issue", "Payment Issue", "Delivery Issue", "Medicine Issue", "Account Issue"],
+    enum: [
+      // General issue types
+      "General", "Order Issue", "Payment Issue", "Delivery Issue", "Medicine Issue", "Account Issue",
+      // Shiprocket order tracking statuses
+      "Order Confirmed", "Shipment Created", "AWB Assigned", "Pickup Scheduled",
+      "Picked Up", "In Transit", "Out For Delivery", "Delivered",
+      "RTO Initiated", "RTO In Transit", "RTO Delivered",
+    ],
     default: "General",
   },
 

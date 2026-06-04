@@ -12,19 +12,14 @@ function paginate(query) {
 
 /* ── Priority mapping based on category ───────────────────────── */
 function getPriorityByCategory(category) {
-  // Medium priority categories
-  const mediumCategories = ["General", "Order Issue", "Payment Issue"];
+  const urgent = ["RTO Initiated", "RTO In Transit", "RTO Delivered"];
+  const high   = ["Delivery Issue", "Medicine Issue", "Account Issue", "Out For Delivery", "Picked Up"];
+  const medium = ["General", "Order Issue", "Payment Issue", "Order Confirmed",
+                  "Shipment Created", "AWB Assigned", "Pickup Scheduled", "In Transit", "Delivered"];
 
-  // High priority categories
-  const highCategories = ["Delivery Issue", "Medicine Issue", "Account Issue"];
-
-  if (mediumCategories.includes(category)) {
-    return "Medium";
-  } else if (highCategories.includes(category)) {
-    return "High";
-  }
-
-  // Default to Medium if category doesn't match
+  if (urgent.includes(category)) return "Urgent";
+  if (high.includes(category))   return "High";
+  if (medium.includes(category)) return "Medium";
   return "Medium";
 }
 
