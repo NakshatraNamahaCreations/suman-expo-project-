@@ -135,6 +135,7 @@ const vendorRoutes = require("./routes/vendorRoutes");
 const userPrescriptionRoutes = require("./routes/userPrescriptionRoutes");
 const shiprocketRoutes = require("./routes/shiprocket.routes");
 const bannerRoutes = require("./routes/bannerRoutes");
+const orderLogRoutes = require("./routes/orderLogRoutes");
 
 const { authMiddleware } = require("./middleware/auth");
 
@@ -212,6 +213,7 @@ app.use("/api/patients", patientRoutes);
 app.use("/api/prescriptions", prescriptionRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/orders", orderRoutes);
+app.use("/api/order-logs", orderLogRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/address", addressRoutes);
 app.use("/api/patient-details", patientDetailsRoutes);
