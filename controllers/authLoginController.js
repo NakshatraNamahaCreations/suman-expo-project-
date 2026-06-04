@@ -338,7 +338,7 @@ exports.getUserProfile = async (req, res) => {
 exports.updateUserName = async (req, res) => {
   try {
     const userId = req.user?.userId;
-    const { name } = req.body;
+    const { name, secondaryPhone } = req.body;
 
     if (!userId) {
       return res.status(401).json({
@@ -354,12 +354,16 @@ exports.updateUserName = async (req, res) => {
       });
     }
 
+    if (secondaryPhone && !/^[0-9]{10}$/.test(secondaryPhone)) {
+      return res.status(400).json({ success: false, message: "Secondary phone must be 10 digits" });
+    }
+
+    const updateData = { name: name.trim(), updatedAt: new Date() };
+    if (secondaryPhone !== undefined) updateData.secondaryPhone = secondaryPhone || null;
+
     const user = await LoginUser.findByIdAndUpdate(
       userId,
-      {
-        name: name.trim(),
-        updatedAt: new Date(),
-      },
+      updateData,
       { new: true }
     ).select("-otp");
 

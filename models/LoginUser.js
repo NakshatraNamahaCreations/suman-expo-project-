@@ -17,6 +17,14 @@ const loginUserSchema = new mongoose.Schema(
       type: String,
       sparse: true,
     },
+    secondaryPhone: {
+      type: String,
+      default: null,
+      validate: {
+        validator: (v) => !v || /^[0-9]{10}$/.test(v),
+        message: "Secondary phone must be 10 digits",
+      },
+    },
     otp: {
       code: String,
       createdAt: Date,
