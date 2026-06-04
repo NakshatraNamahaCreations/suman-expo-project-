@@ -49,6 +49,7 @@ const teamMemberSchema = new mongoose.Schema(
         "login-users",
         "banner-management",
         "order-logs",
+        "patient-logs",
       ],
     },
     status: {
