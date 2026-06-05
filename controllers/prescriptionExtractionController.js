@@ -503,68 +503,178 @@ function looksLikeMedicineLine(line = "") {
   );
 }
 
+/**
+ * Scan the full Rx section for all "N Month(s) QTY" / "N Day(s) QTY" patterns
+ * in document order. Returns one {durationLabel, durationDays, prescriptionQty}
+ * object per match — one per medicine row in a well-formatted table.
+ *
+ * Lookahead (?![\d\/]) prevents matching dates like "28/9/2026" where the
+ * qty digit is immediately followed by "/" (no whitespace between them).
+ * Note: this is (?![\d\/]) NOT (?!\s*[\d\/]) — the \s* variant incorrectly
+ * consumed newlines, which caused qty numbers at end-of-line to be rejected.
+ */
+function extractAllDurationQtyPairs(text) {
+  const pairs = [];
+  const pattern = /(\d+)\s*(?:month(?:s|\(s\))?|day(?:s|\(s\))?|week(?:s|\(s\))?)\s+(\d{1,4})(?![\d\/])/gi;
+  let m;
+  while ((m = pattern.exec(text)) !== null) {
+    const num   = parseInt(m[1], 10);
+    const qty   = parseInt(m[2], 10);
+    const full  = m[0].toLowerCase();
+    let durationDays = 0;
+    if (full.includes("month"))      durationDays = num * 30;
+    else if (full.includes("week"))  durationDays = num * 7;
+    else if (full.includes("day"))   durationDays = num;
+    if (qty >= 10 && qty <= 9999 && durationDays > 0) {
+      const durationLabel = full.includes("month") ? `${num} Month(s)` :
+                            full.includes("week")  ? `${num} Week(s)`  :
+                                                     `${num} Day(s)`;
+      pairs.push({ durationLabel, durationDays, prescriptionQty: qty });
+    }
+  }
+  return pairs;
+}
+
+/**
+ * Crop the raw OCR text to just the Rx table section.
+ * Stops before investigation results, followup notes, and footer text
+ * so those lines cannot contaminate the medicine data.
+ */
+function extractRxSection(text) {
+  // End at the first of these markers
+  const endMarkers = [
+    /\bInvestigation\s+Results?\b/i,
+    /\bNext\s+followup\b/i,
+    /\bAll\s+Medications\s+are\b/i,
+    /\bPatient\s+has\s+been\s+explained\b/i,
+    /\bR\s*G\s+Pharma\b/i,
+  ];
+  let end = text.length;
+  for (const re of endMarkers) {
+    const idx = text.search(re);
+    if (idx > 0 && idx < end) end = idx;
+  }
+
+  // Start just before the Rx header line
+  const rxIdx = text.search(/(?:^|\n)\s*Rx\b/i);
+  const start = rxIdx >= 0 ? rxIdx : 0;
+
+  return text.substring(start, end);
+}
+
+/**
+ * Collect all TABLET/CAPSULE medicine-name lines in document order.
+ * Each line is deduplicated by normalised name.
+ */
+function extractAllMedicineNamesFromSection(rxText) {
+  const names = [];
+  for (const line of rxText.split(/\n/).map(l => l.trim()).filter(Boolean)) {
+    if (!looksLikeMedicineLine(line)) continue;
+    const name = extractMedicineNameFromBlock(line);
+    if (!name || name.length < 3) continue;
+    const key = normalizeMedicineName(name);
+    if (!names.some(n => normalizeMedicineName(n) === key)) names.push(name);
+  }
+  return names;
+}
+
+/**
+ * Collect all "N Tablet" / "N Capsule" doses in document order.
+ * Only matches when a digit immediately precedes the unit word so that
+ * "TABLET MEDICINE_NAME" (no leading digit) is never captured.
+ */
+function extractAllDosesFromSection(rxText) {
+  const doses = [];
+  const re = /\b(\d+)\s*(tablet|tab|capsule|cap)\b/gi;
+  let m;
+  while ((m = re.exec(rxText)) !== null) {
+    const n = parseInt(m[1], 10);
+    if (n < 1 || n > 20) continue; // ignore implausible doses
+    const unit = /cap/i.test(m[2]) ? "Capsule" : "Tablet";
+    doses.push(`${n} ${unit}`);
+  }
+  return doses;
+}
+
+/**
+ * Collect all X-X-X frequency strings in document order.
+ * Uses single-digit slots (0–9) which is standard for M-A-N notation.
+ */
+function extractAllFrequenciesFromSection(rxText) {
+  const freqs = [];
+  const re = /\b(\d)\s*[-–—]\s*(\d)\s*[-–—]\s*(\d)\b/g;
+  let m;
+  while ((m = re.exec(rxText)) !== null) {
+    freqs.push(`${m[1]}-${m[2]}-${m[3]}`);
+  }
+  return freqs;
+}
+
+/**
+ * Collect "After Food" / "Before Food" instructions in document order.
+ */
+function extractAllInstructionsFromSection(rxText) {
+  const insts = [];
+  const re = /\b(after\s+food|before\s+food|with\s+food|after\s+meal|before\s+meal)\b/gi;
+  let m;
+  while ((m = re.exec(rxText)) !== null) {
+    const v = m[0].toLowerCase();
+    insts.push(v.includes("before") ? "Before Food" : v.includes("with") ? "With Food" : "After Food");
+  }
+  return insts;
+}
+
+/**
+ * Column-extraction parser for tabular prescriptions.
+ *
+ * Instead of a per-medicine fixed window (which cross-contaminates rows when
+ * the OCR column layout differs from expectations), this function extracts
+ * each column independently across the whole Rx section and then zips them
+ * by index. This guarantees that medicine #6 gets the 6th dose, 6th frequency,
+ * and 6th duration — regardless of how the OCR laid out the lines.
+ */
 function extractMedicineRowsFromPrescription(text) {
-  const rawLines = text
-    .split(/\n+/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  // Isolate the Rx table only — investigation results and followup notes
+  // often contain "X Month(s)" text that would corrupt duration extraction.
+  const rxText = extractRxSection(text);
+  console.log(`📋 Rx section: ${rxText.length} chars (full text: ${text.length} chars)`);
 
-  const medicines = [];
+  const names     = extractAllMedicineNamesFromSection(rxText);
+  const doses     = extractAllDosesFromSection(rxText);
+  const freqs     = extractAllFrequenciesFromSection(rxText);
+  const insts     = extractAllInstructionsFromSection(rxText);
+  const durPairs  = extractAllDurationQtyPairs(rxText);
 
-  for (let i = 0; i < rawLines.length; i++) {
-    const currentLine = rawLines[i];
+  console.log(`💊 Columns — medicines:${names.length} doses:${doses.length} freqs:${freqs.length} durs:${durPairs.length}`);
+  console.log("  Names:", names);
+  console.log("  Doses:", doses);
+  console.log("  Freqs:", freqs);
+  console.log("  Dur-Qty:", JSON.stringify(durPairs));
 
-    if (!looksLikeMedicineLine(currentLine)) continue;
+  return names.map((medicineName, i) => {
+    const dose          = doses[i]    || "1 Tablet";
+    const frequency     = freqs[i]    || "";
+    const instruction   = insts[i]    || "";
+    const dp            = i < durPairs.length ? durPairs[i] : {};
+    const durationDays  = dp.durationDays   || 0;
+    const durationLabel = dp.durationLabel  || "";
+    const prescriptionQty = dp.prescriptionQty || null;
 
-    const nextLines = rawLines.slice(i, i + 8);
-    const block = nextLines.join(" ");
+    console.log(`  [${i + 1}] ${medicineName}: ${dose}, ${frequency}, ${durationLabel}(${durationDays}d), qty=${prescriptionQty}`);
 
-    const medicineName = extractMedicineNameFromBlock(currentLine);
-    const dose = extractDoseFromBlock(block);
-    const frequency = extractFrequencyFromBlock(block, nextLines);
-    const instruction = extractInstructionFromBlock(block);
-    const durationLabel = extractDurationFromBlock(block, nextLines);
-    const durationDays = getDurationDays(durationLabel);
-    const prescriptionQty = extractPrescriptionQty(block);
-
-    if (!medicineName || medicineName.length < 3) continue;
-
-    const row = {
+    return {
       medicineName,
       name: medicineName,
-
-      dose: dose || "",
-      frequency: frequency || "",
-      freqLabel: frequency || "",
-      instruction: instruction || "",
-
-      // duration is days number
-      duration: durationDays,
+      dose,
+      frequency,
+      freqLabel: frequency,
+      instruction,
+      duration:   durationDays,
       durationDays,
-
-      // original text from prescription
-      durationLabel: durationLabel || "",
-
-      // Qty as explicitly written in the prescription Qty column
-      prescriptionQty: prescriptionQty || null,
+      durationLabel,
+      prescriptionQty,
     };
-
-    medicines.push(row);
-  }
-
-  const unique = [];
-
-  for (const med of medicines) {
-    const key = normalizeMedicineName(med.medicineName);
-
-    const exists = unique.some(
-      (item) => normalizeMedicineName(item.medicineName) === key
-    );
-
-    if (!exists) unique.push(med);
-  }
-
-  return unique;
+  });
 }
 
 function extractMedicineNameFromBlock(line = "") {
