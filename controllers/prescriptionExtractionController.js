@@ -1,3 +1,688 @@
+// const fs = require("fs");
+// const vision = require("@google-cloud/vision");
+// const Medicine = require("../models/Medicine");
+
+// const client = new vision.ImageAnnotatorClient();
+
+// exports.extractMedicinesFromPrescription = async (req, res) => {
+//   let filePath = null;
+
+//   try {
+//     if (!req.file) {
+//       return res.status(400).json({ success: false, message: "No file uploaded" });
+//     }
+
+//     filePath = req.file.path;
+//     const fileName = req.file.originalname;
+//     const mimeType = req.file.mimetype;
+
+//     console.log(`\n📄 Processing: ${fileName}`);
+
+//     // Validate file
+//     if (!fs.existsSync(filePath)) {
+//       return res.status(400).json({ success: false, message: "File not found" });
+//     }
+
+//     const stats = fs.statSync(filePath);
+//     if (stats.size === 0) {
+//       if (filePath) fs.unlinkSync(filePath);
+//       return res.status(400).json({ success: false, message: "File is empty" });
+//     }
+
+//     // Extract text using Google Vision
+//     console.log("🔍 Extracting text with Google Vision OCR...");
+//     const imageBuffer = fs.readFileSync(filePath);
+
+//     let extractedText = "";
+//     try {
+//       const request = {
+//         image: { content: imageBuffer },
+//         features: [{ type: "TEXT_DETECTION" }],
+//       };
+
+//       const [result] = await client.annotateImage(request);
+
+//       if (result.fullTextAnnotation && result.fullTextAnnotation.text) {
+//         extractedText = result.fullTextAnnotation.text;
+//       } else if (result.textAnnotations && result.textAnnotations.length > 0) {
+//         extractedText = result.textAnnotations.map(t => t.description).join("\n");
+//       }
+//     } catch (ocrError) {
+//       console.error("OCR Error:", ocrError.message);
+//       if (filePath) fs.unlinkSync(filePath);
+//       return res.status(400).json({ success: false, message: "Could not read the prescription. Please upload a clear image or PDF." });
+//     }
+
+//     if (!extractedText || extractedText.trim().length === 0) {
+//       if (filePath) fs.unlinkSync(filePath);
+//       return res.json({ success: true, message: "No text found in image", extractedText: "", matchedMedicines: [], matchedCount: 0 });
+//     }
+
+//     console.log(`✅ Extracted ${extractedText.length} characters`);
+
+//     // Extract medicine names
+//     const medicineNames = extractMedicineNames(extractedText);
+//     console.log(`💊 Found ${medicineNames.length} medicine names`);
+
+//     if (medicineNames.length === 0) {
+//       if (filePath) fs.unlinkSync(filePath);
+//       return res.json({ success: true, message: "No medicines found", extractedText, matchedMedicines: [], matchedCount: 0 });
+//     }
+
+//     // Match with database
+//     console.log("🔗 Matching with database...");
+//     const matchedMedicines = await matchMedicinesWithDatabase(medicineNames);
+//     console.log(`✅ Matched ${matchedMedicines.length} medicines`);
+
+//     // Cleanup
+//     if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+
+//     return res.json({
+//       success: true,
+//       message: matchedMedicines.length > 0 ? `Found ${matchedMedicines.length} medicine(s)` : "No matching medicines found",
+//       extractedText,
+//       extractedMedicines: medicineNames,
+//       matchedMedicines,
+//       matchedCount: matchedMedicines.length,
+//     });
+//   } catch (error) {
+//     console.error("Error:", error.message);
+//     if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+//     return res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
+
+// function normalizeText(text) {
+//   return text.toLowerCase().trim().replace(/\s+/g, " ").replace(/[^\w\s]/g, "").trim();
+// }
+
+// function extractMedicineNames(text) {
+//   const lines = text.split("\n");
+//   const medicines = [];
+//   const skipWords = ["investigation", "signature", "doctor", "patient", "date", "age", "notes", "footer"];
+
+//   for (const line of lines) {
+//     let med = line.trim();
+
+//     if (!med || med.length < 3) continue;
+//     if (skipWords.some(w => med.toLowerCase().includes(w))) continue;
+//     if (/^\d+$/.test(med)) continue;
+
+//     // Remove numbering
+//     med = med.replace(/^\d+[\.\)]\s*/, "");
+
+//     // Extract medicine name before dosage/quantity/frequency
+//     med = med.split(/\s+(\d+-\d+-\d+|\d+\s*(tablet|capsule|mg|ml|gm|drop|days?|weeks?|morning|evening|night|bd|td|od))/i)[0];
+
+//     med = med.trim().replace(/[^\w\s\-]/g, "").trim();
+
+//     if (med && med.length >= 3 && /[a-zA-Z]/.test(med) && !medicines.includes(med)) {
+//       medicines.push(med);
+//     }
+//   }
+
+//   return medicines;
+// }
+
+// async function matchMedicinesWithDatabase(medicineNames) {
+//   const matched = [];
+
+//   try {
+//     const dbMedicines = await Medicine.find({ status: "Active" }).lean();
+
+//     for (const name of medicineNames) {
+//       const normalized = normalizeText(name);
+
+//       const dbMed = dbMedicines.find(m => normalizeText(m.description) === normalized);
+
+//       if (dbMed) {
+//         matched.push({
+//           _id: dbMed._id.toString(),
+//           medicineId: dbMed._id.toString(),
+//           description: dbMed.description,
+//           name: dbMed.description,
+//           mfr: dbMed.mfr || "N/A",
+//           vendor: dbMed.vendor || "N/A",
+//           pack: dbMed.pack || "N/A",
+//           price: dbMed.newMrp || 0,
+//           mrp: dbMed.newMrp || 0,
+//           qty: dbMed.qty || 0,
+//           inStock: (dbMed.qty || 0) > 0,
+//           gstPercent: dbMed.gstPercent || 5,
+//         });
+//       }
+//     }
+//   } catch (error) {
+//     console.error("Database error:", error.message);
+//   }
+
+//   return matched;
+// }
+
+
+// const fs = require("fs");
+// const vision = require("@google-cloud/vision");
+// const Medicine = require("../models/Medicine");
+
+// const client = new vision.ImageAnnotatorClient();
+
+// exports.extractMedicinesFromPrescription = async (req, res) => {
+//   let filePath = null;
+
+//   try {
+//     if (!req.file) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "No file uploaded",
+//       });
+//     }
+
+//     filePath = req.file.path;
+//     const fileName = req.file.originalname;
+//     const mimeType = req.file.mimetype;
+
+//     console.log(`\n📄 Processing: ${fileName}`);
+//     console.log(`📄 MIME Type: ${mimeType}`);
+
+//     if (!fs.existsSync(filePath)) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "File not found",
+//       });
+//     }
+
+//     const stats = fs.statSync(filePath);
+
+//     if (stats.size === 0) {
+//       safeDeleteFile(filePath);
+//       return res.status(400).json({
+//         success: false,
+//         message: "File is empty",
+//       });
+//     }
+
+//     console.log("🔍 Extracting text with Google Vision DOCUMENT_TEXT_DETECTION...");
+
+//     const imageBuffer = fs.readFileSync(filePath);
+
+//     let extractedText = "";
+
+//     try {
+//       const request = {
+//         image: {
+//           content: imageBuffer,
+//         },
+//         features: [
+//           {
+//             type: "DOCUMENT_TEXT_DETECTION",
+//           },
+//         ],
+//         imageContext: {
+//           languageHints: ["en"],
+//         },
+//       };
+
+//       const [result] = await client.annotateImage(request);
+
+//       if (result.fullTextAnnotation && result.fullTextAnnotation.text) {
+//         extractedText = result.fullTextAnnotation.text;
+//       } else if (result.textAnnotations && result.textAnnotations.length > 0) {
+//         extractedText = result.textAnnotations
+//           .map((item) => item.description)
+//           .join("\n");
+//       }
+//     } catch (ocrError) {
+//       console.error("❌ OCR Error:", ocrError.message);
+
+//       safeDeleteFile(filePath);
+
+//       return res.status(400).json({
+//         success: false,
+//         message:
+//           "Could not read the prescription. Please upload a clear image or PDF.",
+//       });
+//     }
+
+//     if (!extractedText || extractedText.trim().length === 0) {
+//       safeDeleteFile(filePath);
+
+//       return res.json({
+//         success: true,
+//         message: "No text found in image",
+//         extractedText: "",
+//         extractedMedicines: [],
+//         matchedMedicines: [],
+//         matchedCount: 0,
+//       });
+//     }
+
+//     console.log(`✅ Extracted ${extractedText.length} characters`);
+//     console.log("\n🧾 RAW OCR TEXT START");
+//     console.log(extractedText);
+//     console.log("🧾 RAW OCR TEXT END\n");
+
+//     const extractedMedicines = extractMedicineRowsFromPrescription(extractedText);
+
+//     console.log(
+//       "🧾 FINAL OCR MEDICINES:",
+//       JSON.stringify(extractedMedicines, null, 2)
+//     );
+
+//     if (extractedMedicines.length === 0) {
+//       safeDeleteFile(filePath);
+
+//       return res.json({
+//         success: true,
+//         message: "No medicines found",
+//         extractedText,
+//         extractedMedicines: [],
+//         matchedMedicines: [],
+//         matchedCount: 0,
+//       });
+//     }
+
+//     console.log("🔗 Matching with database...");
+
+//     const matchedMedicines = await matchMedicinesWithDatabase(extractedMedicines);
+
+//     console.log(`✅ Matched ${matchedMedicines.length} medicines`);
+//     console.log(
+//       "💊 FINAL MATCHED MEDICINES:",
+//       JSON.stringify(matchedMedicines, null, 2)
+//     );
+
+//     safeDeleteFile(filePath);
+
+//     return res.json({
+//       success: true,
+//       message:
+//         matchedMedicines.length > 0
+//           ? `Found ${matchedMedicines.length} medicine(s)`
+//           : "No matching medicines found",
+//       extractedText,
+//       extractedMedicines,
+//       matchedMedicines,
+//       matchedCount: matchedMedicines.length,
+//     });
+//   } catch (error) {
+//     console.error("❌ Prescription extraction error:", error);
+
+//     safeDeleteFile(filePath);
+
+//     return res.status(500).json({
+//       success: false,
+//       message: error.message || "Server error while reading prescription",
+//     });
+//   }
+// };
+
+// function safeDeleteFile(filePath) {
+//   try {
+//     if (filePath && fs.existsSync(filePath)) {
+//       fs.unlinkSync(filePath);
+//     }
+//   } catch (error) {
+//     console.error("File delete error:", error.message);
+//   }
+// }
+
+// function normalizeText(text = "") {
+//   return String(text)
+//     .toLowerCase()
+//     .trim()
+//     .replace(/[^\w\s.%/-]/g, " ")
+//     .replace(/\s+/g, " ")
+//     .trim();
+// }
+
+// function normalizeMedicineName(text = "") {
+//   return String(text)
+//     .toUpperCase()
+//     .replace(/[^\w\s.%/-]/g, " ")
+//     .replace(/\b(TAB|TABLET|CAP|CAPSULE|INJ|INJECTION|CREAM|OINTMENT|SYRUP|DROP|DROPS)\b/g, " ")
+//     .replace(/\s+/g, " ")
+//     .trim();
+// }
+
+// function cleanMedicineName(text = "") {
+//   let value = String(text || "").trim();
+
+//   value = value.replace(/^\d+[\.\)]\s*/, "");
+//   value = value.replace(/\s+/g, " ");
+//   value = value.replace(/[^\w\s.%/-]/g, " ");
+//   value = value.replace(/\s+/g, " ").trim();
+
+//   return value;
+// }
+
+// function cleanFrequency(value = "") {
+//   if (!value) return "";
+
+//   const text = String(value)
+//     .replace(/\s+/g, "")
+//     .replace(/[–—]/g, "-")
+//     .replace(/\|/g, "-")
+//     .replace(/_/g, "-");
+
+//   const match = text.match(/\d-\d-\d/);
+
+//   return match ? match[0] : "";
+// }
+
+// function cleanDuration(value = "") {
+//   if (!value) return "";
+
+//   let text = String(value)
+//     .replace(/\s+/g, " ")
+//     .trim();
+
+//   const match = text.match(/\d+\s*(month|months|month\(s\)|day|days|day\(s\)|week|weeks|week\(s\))/i);
+
+//   if (!match) return "";
+
+//   let result = match[0].trim();
+
+//   result = result.replace(/months?/i, "Month(s)");
+//   result = result.replace(/days?/i, "Day(s)");
+//   result = result.replace(/weeks?/i, "Week(s)");
+
+//   return result;
+// }
+
+// function getDurationDays(durationText = "") {
+//   if (!durationText) return 0;
+
+//   const text = String(durationText).toLowerCase();
+//   const numberMatch = text.match(/\d+/);
+//   const number = numberMatch ? Number(numberMatch[0]) : 0;
+
+//   if (!number) return 0;
+
+//   if (text.includes("month")) return number * 30;
+//   if (text.includes("week")) return number * 7;
+//   if (text.includes("day")) return number;
+
+//   return 0;
+// }
+
+// function cleanInstruction(value = "") {
+//   if (!value) return "";
+
+//   const text = String(value).toLowerCase();
+
+//   if (text.includes("after food")) return "After Food";
+//   if (text.includes("before food")) return "Before Food";
+//   if (text.includes("after meal")) return "After Food";
+//   if (text.includes("before meal")) return "Before Food";
+//   if (text.includes("with food")) return "With Food";
+
+//   return "";
+// }
+
+// function cleanDose(value = "") {
+//   if (!value) return "";
+
+//   const text = String(value).trim();
+
+//   const tabletMatch = text.match(/\d+\s*(tablet|tab|capsule|cap)/i);
+//   if (tabletMatch) {
+//     const qty = tabletMatch[0].match(/\d+/)?.[0] || "1";
+//     const unit = tabletMatch[0].toLowerCase().includes("cap")
+//       ? "Capsule"
+//       : "Tablet";
+//     return `${qty} ${unit}`;
+//   }
+
+//   if (/to\s*apply/i.test(text)) return "To Apply";
+
+//   return "";
+// }
+
+// function isHeaderOrInvalidLine(line = "") {
+//   const text = line.toLowerCase();
+
+//   const skipWords = [
+//     "brand",
+//     "strength",
+//     "dose",
+//     "frequency",
+//     "instruction",
+//     "duration",
+//     "investigation",
+//     "signature",
+//     "doctor",
+//     "patient",
+//     "date",
+//     "age",
+//     "notes",
+//     "footer",
+//     "prescription",
+//   ];
+
+//   if (!line || line.trim().length < 3) return true;
+//   if (skipWords.some((word) => text.includes(word))) return true;
+//   if (/^\d+$/.test(line.trim())) return true;
+
+//   return false;
+// }
+
+// function looksLikeMedicineLine(line = "") {
+//   const text = line.trim();
+
+//   if (isHeaderOrInvalidLine(text)) return false;
+
+//   return /\b(TABLET|TAB|CAPSULE|CAP|CREAM|SYRUP|INJECTION|INJ|OINTMENT|DROP|DROPS)\b/i.test(
+//     text
+//   );
+// }
+
+// function extractMedicineRowsFromPrescription(text) {
+//   const rawLines = text
+//     .split(/\n+/)
+//     .map((line) => line.trim())
+//     .filter(Boolean);
+
+//   const medicines = [];
+
+//   for (let i = 0; i < rawLines.length; i++) {
+//     const currentLine = rawLines[i];
+
+//     if (!looksLikeMedicineLine(currentLine)) continue;
+
+//     const nextLines = rawLines.slice(i, i + 8);
+//     const block = nextLines.join(" ");
+
+//     const medicineName = extractMedicineNameFromBlock(currentLine);
+//     const dose = extractDoseFromBlock(block);
+//     const frequency = extractFrequencyFromBlock(block, nextLines);
+//     const instruction = extractInstructionFromBlock(block);
+//     const duration = extractDurationFromBlock(block, nextLines);
+
+//     if (!medicineName || medicineName.length < 3) continue;
+
+//     const row = {
+//       medicineName,
+//       name: medicineName,
+//       dose: dose || "",
+//       frequency: frequency || "",
+//       instruction: instruction || "",
+//       duration: duration || "",
+//       durationDays: getDurationDays(duration),
+//     };
+
+//     medicines.push(row);
+//   }
+
+//   const unique = [];
+
+//   for (const med of medicines) {
+//     const key = normalizeMedicineName(med.medicineName);
+
+//     const exists = unique.some(
+//       (item) => normalizeMedicineName(item.medicineName) === key
+//     );
+
+//     if (!exists) unique.push(med);
+//   }
+
+//   return unique;
+// }
+
+// function extractMedicineNameFromBlock(line = "") {
+//   let value = cleanMedicineName(line);
+
+//   value = value.replace(/^\d+[\.\)]\s*/, "");
+
+//   const stopPatterns = [
+//     /\s+\d+\s*(tablet|tab|capsule|cap)\b/i,
+//     /\s+\d-\d-\d\b/i,
+//     /\s+after\s+food\b/i,
+//     /\s+before\s+food\b/i,
+//     /\s+\d+\s*(month|months|day|days|week|weeks)\b/i,
+//   ];
+
+//   for (const pattern of stopPatterns) {
+//     const match = value.match(pattern);
+
+//     if (match && match.index > 0) {
+//       value = value.substring(0, match.index).trim();
+//     }
+//   }
+
+//   return value;
+// }
+
+// function extractDoseFromBlock(block = "") {
+//   const dose = cleanDose(block);
+
+//   if (dose) return dose;
+
+//   if (/cream/i.test(block) && /apply/i.test(block)) return "To Apply";
+
+//   return "";
+// }
+
+// function extractFrequencyFromBlock(block = "", lines = []) {
+//   const blockFreq = cleanFrequency(block);
+
+//   if (blockFreq) return blockFreq;
+
+//   for (const line of lines) {
+//     const freq = cleanFrequency(line);
+//     if (freq) return freq;
+//   }
+
+//   return "";
+// }
+
+// function extractInstructionFromBlock(block = "") {
+//   return cleanInstruction(block);
+// }
+
+// function extractDurationFromBlock(block = "", lines = []) {
+//   const blockDuration = cleanDuration(block);
+
+//   if (blockDuration) return blockDuration;
+
+//   for (const line of lines) {
+//     const duration = cleanDuration(line);
+//     if (duration) return duration;
+//   }
+
+//   return "";
+// }
+
+// function getMedicineMatchScore(ocrName = "", dbName = "") {
+//   const a = normalizeMedicineName(ocrName);
+//   const b = normalizeMedicineName(dbName);
+
+//   if (!a || !b) return 0;
+
+//   if (a === b) return 100;
+
+//   if (a.includes(b) || b.includes(a)) return 90;
+
+//   const aTokens = a.split(" ").filter((token) => token.length > 1);
+//   const bTokens = b.split(" ").filter((token) => token.length > 1);
+
+//   let common = 0;
+
+//   for (const token of aTokens) {
+//     if (bTokens.includes(token)) {
+//       common += 1;
+//     }
+//   }
+
+//   const maxTokens = Math.max(aTokens.length, bTokens.length);
+
+//   if (!maxTokens) return 0;
+
+//   return Math.round((common / maxTokens) * 100);
+// }
+
+// async function matchMedicinesWithDatabase(extractedMedicines) {
+//   const matched = [];
+
+//   try {
+//     const dbMedicines = await Medicine.find({ status: "Active" }).lean();
+
+//     for (const ocrMed of extractedMedicines) {
+//       const ocrName = ocrMed.medicineName || ocrMed.name || "";
+
+//       let bestMatch = null;
+//       let bestScore = 0;
+
+//       for (const dbMed of dbMedicines) {
+//         const dbName = dbMed.description || dbMed.name || "";
+//         const score = getMedicineMatchScore(ocrName, dbName);
+
+//         if (score > bestScore) {
+//           bestScore = score;
+//           bestMatch = dbMed;
+//         }
+//       }
+
+//       if (bestMatch && bestScore >= 60) {
+//         matched.push({
+//           _id: bestMatch._id.toString(),
+//           medicineId: bestMatch._id.toString(),
+
+//           description: bestMatch.description,
+//           name: bestMatch.description,
+
+//           mfr: bestMatch.mfr || "N/A",
+//           vendor: bestMatch.vendor || "N/A",
+//           pack: bestMatch.pack || "N/A",
+
+//           price: bestMatch.newMrp || bestMatch.price || 0,
+//           mrp: bestMatch.newMrp || bestMatch.mrp || 0,
+//           qty: bestMatch.qty || 0,
+//           stock: bestMatch.qty || 0,
+//           inStock: (bestMatch.qty || 0) > 0,
+//           gstPercent: bestMatch.gstPercent || 5,
+
+//           dose: ocrMed.dose || "",
+//           frequency: ocrMed.frequency || "",
+//           freqLabel: ocrMed.frequency || "",
+//           instruction: ocrMed.instruction || "",
+//           duration: ocrMed.duration || "",
+//           durationLabel: ocrMed.duration || "",
+//           durationDays: ocrMed.durationDays || getDurationDays(ocrMed.duration),
+
+//           ocrMedicineName: ocrName,
+//           matchScore: bestScore,
+//         });
+//       } else {
+//         console.log(`⚠️ No DB match for OCR medicine: ${ocrName}`);
+//       }
+//     }
+//   } catch (error) {
+//     console.error("Database error:", error.message);
+//   }
+
+//   return matched;
+// }
+
 
 const fs = require("fs");
 const axios = require("axios");
@@ -131,15 +816,11 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
 
       if (result.fullTextAnnotation && result.fullTextAnnotation.text) {
         extractedText = result.fullTextAnnotation.text;
-        // Attach the full Vision annotation so the spatial extractor can use it
-        result._fullAnnotation = result.fullTextAnnotation;
       } else if (result.textAnnotations && result.textAnnotations.length > 0) {
         extractedText = result.textAnnotations
           .map((item) => item.description)
           .join("\n");
       }
-      // Store the Vision result for spatial extraction below
-      req._visionResult = result;
     } catch (ocrError) {
       console.error("❌ OCR Error:", ocrError.message);
 
@@ -204,13 +885,7 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
     console.log(extractedText);
     console.log("🧾 RAW OCR TEXT END\n");
 
-    // Primary: spatial (bounding-box) row extraction — groups Vision words by
-    // Y-coordinate so each medicine row's name, dose, freq, duration, qty are
-    // parsed together and cannot be cross-contaminated by adjacent rows.
-    // Fallback: text-based extraction (for PDFs / non-spatial responses).
-    const visionAnnotation = req._visionResult?.fullTextAnnotation || req._visionResult?._fullAnnotation;
-    const extractedMedicines = extractMedicineRowsFromPrescriptionSpatial(visionAnnotation)
-      || extractMedicineRowsFromPrescription(extractedText);
+    const extractedMedicines = extractMedicineRowsFromPrescription(extractedText);
 
     console.log("🧾 FINAL OCR MEDICINES:", JSON.stringify(extractedMedicines, null, 2));
 
@@ -399,21 +1074,22 @@ function cleanDurationLabel(value = "") {
 function extractPrescriptionQty(block = "") {
   const text = String(block);
 
-  // Match: qty number IMMEDIATELY after a duration string.
-  // e.g. "6 Month(s) 180", "15 Day(s) 15", "3 Months 90"
-  // Requirements:
-  //   - qty must be >= 10 (avoids matching dose "1 Tablet" that follows "Day(s)")
-  //   - qty must not be followed by "/" (avoids partial date captures)
+  // Pattern: number directly after duration — "6 Month(s) 180" or "15 Day(s) 15"
   const afterDuration = text.match(
-    /(?:\d+\s*(?:month|months|month\(s\)|day|days|day\(s\)|week|weeks|week\(s\)))\s+(\d{1,4})(?![\d\/])/i
+    /(?:\d+\s*(?:month|months|month\(s\)|day|days|day\(s\)|week|weeks|week\(s\)))\s+(\d{1,4})\b/i
   );
   if (afterDuration) {
     const qty = parseInt(afterDuration[1], 10);
-    if (qty >= 10 && qty <= 9999) return qty;
+    if (qty > 0 && qty <= 9999) return qty;
   }
 
-  // No aggressive "last number" fallback — it falsely matches numbers in
-  // medicine names (e.g. "200/150 MG" → 150) and adjacent dose lines.
+  // Fallback: last standalone 2-4 digit number in the block
+  const allNums = [...text.matchAll(/\b(\d{2,4})\b/g)];
+  if (allNums.length > 0) {
+    const last = parseInt(allNums[allNums.length - 1][1], 10);
+    if (last >= 10 && last <= 9999) return last;
+  }
+
   return null;
 }
 
@@ -507,493 +1183,73 @@ function looksLikeMedicineLine(line = "") {
 
   if (isHeaderOrInvalidLine(text)) return false;
 
-  // Must contain a medicine-type keyword
-  if (!/\b(TABLET|TAB|CAPSULE|CAP|CREAM|SYRUP|INJECTION|INJ|OINTMENT|DROP|DROPS)\b/i.test(text)) {
-    return false;
-  }
-
-  // Reject dosage lines: a line starting with "N Tablet/Tab" is a dose/data row,
-  // not a medicine name.  e.g. "2 Tablet 0-0-1 After Food 2 Month(s) 120"
-  // Without this guard, dose lines are treated as medicine boundaries and shrink
-  // each medicine's block to a single name-only line.
-  if (/^\d+\s+(tablet|tab|capsule|cap)\b/i.test(text)) {
-    return false;
-  }
-
-  return true;
+  return /\b(TABLET|TAB|CAPSULE|CAP|CREAM|SYRUP|INJECTION|INJ|OINTMENT|DROP|DROPS)\b/i.test(
+    text
+  );
 }
 
-/**
- * Scan the full Rx section for all "N Month(s) QTY" / "N Day(s) QTY" patterns
- * in document order. Returns one {durationLabel, durationDays, prescriptionQty}
- * object per match — one per medicine row in a well-formatted table.
- *
- * Lookahead (?![\d\/]) prevents matching dates like "28/9/2026" where the
- * qty digit is immediately followed by "/" (no whitespace between them).
- * Note: this is (?![\d\/]) NOT (?!\s*[\d\/]) — the \s* variant incorrectly
- * consumed newlines, which caused qty numbers at end-of-line to be rejected.
- */
-function extractAllDurationQtyPairs(text) {
-  const pairs = [];
-  const pattern = /(\d+)\s*(?:month(?:s|\(s\))?|day(?:s|\(s\))?|week(?:s|\(s\))?)\s+(\d{1,4})(?![\d\/])/gi;
-  let m;
-  while ((m = pattern.exec(text)) !== null) {
-    const num   = parseInt(m[1], 10);
-    const qty   = parseInt(m[2], 10);
-    const full  = m[0].toLowerCase();
-    let durationDays = 0;
-    if (full.includes("month"))      durationDays = num * 30;
-    else if (full.includes("week"))  durationDays = num * 7;
-    else if (full.includes("day"))   durationDays = num;
-    if (qty >= 10 && qty <= 9999 && durationDays > 0) {
-      const durationLabel = full.includes("month") ? `${num} Month(s)` :
-                            full.includes("week")  ? `${num} Week(s)`  :
-                                                     `${num} Day(s)`;
-      pairs.push({ durationLabel, durationDays, prescriptionQty: qty });
-    }
-  }
-  return pairs;
-}
-
-/**
- * Search the FULL OCR text for the Duration+Qty pair that belongs to a
- * specific medicine by scanning the text segment between that medicine's
- * OCR line and the next medicine's OCR line.
- *
- * WHY: when globalPairs count doesn't match medicine count (e.g. one
- * medicine's qty is unreadable so only N-1 pairs exist), pure indexed
- * matching causes a swap — medicine N-1 gets medicine N's pair.
- * This function avoids that by searching each medicine's own text segment.
- */
-function extractDurationQtyForMedicine(fullText, medLine, nextMedLine) {
-  const startPos = fullText.indexOf(medLine);
-  if (startPos < 0) return null;
-
-  // End: next medicine's name line, OR an investigation/footer marker
-  let endPos = fullText.length;
-  if (nextMedLine) {
-    const nextPos = fullText.indexOf(nextMedLine, startPos + medLine.length);
-    if (nextPos > startPos) endPos = nextPos;
-  }
-  for (const re of [
-    /Investigation\s+Results?/i,
-    /All\s+Medications\s+are/i,
-    /Next\s+followup/i,
-    /\bR\s*G\s+Pharma\b/i,
-  ]) {
-    const idx = fullText.search(re);
-    if (idx > startPos && idx < endPos) endPos = idx;
-  }
-
-  const segment = fullText.substring(startPos, endPos);
-  const pairs   = extractAllDurationQtyPairs(segment);
-  return pairs.length > 0 ? pairs[0] : null;
-}
-
-/**
- * Crop the raw OCR text to just the Rx table section.
- * Stops before investigation results, followup notes, and footer text
- * so those lines cannot contaminate the medicine data.
- */
-function extractRxSection(text) {
-  // End at the first of these markers
-  const endMarkers = [
-    /\bInvestigation\s+Results?\b/i,
-    /\bNext\s+followup\b/i,
-    /\bAll\s+Medications\s+are\b/i,
-    /\bPatient\s+has\s+been\s+explained\b/i,
-    /\bR\s*G\s+Pharma\b/i,
-  ];
-  let end = text.length;
-  for (const re of endMarkers) {
-    const idx = text.search(re);
-    if (idx > 0 && idx < end) end = idx;
-  }
-
-  // Start just before the Rx header line
-  const rxIdx = text.search(/(?:^|\n)\s*Rx\b/i);
-  const start = rxIdx >= 0 ? rxIdx : 0;
-
-  return text.substring(start, end);
-}
-
-/**
- * Collect all TABLET/CAPSULE medicine-name lines in document order.
- * Each line is deduplicated by normalised name.
- */
-function extractAllMedicineNamesFromSection(rxText) {
-  const names = [];
-  for (const line of rxText.split(/\n/).map(l => l.trim()).filter(Boolean)) {
-    if (!looksLikeMedicineLine(line)) continue;
-    const name = extractMedicineNameFromBlock(line);
-    if (!name || name.length < 3) continue;
-    const key = normalizeMedicineName(name);
-    if (!names.some(n => normalizeMedicineName(n) === key)) names.push(name);
-  }
-  return names;
-}
-
-/**
- * Collect all "N Tablet" / "N Capsule" doses in document order.
- * Only matches when a digit immediately precedes the unit word so that
- * "TABLET MEDICINE_NAME" (no leading digit) is never captured.
- */
-function extractAllDosesFromSection(rxText) {
-  const doses = [];
-  const re = /\b(\d+)\s*(tablet|tab|capsule|cap)\b/gi;
-  let m;
-  while ((m = re.exec(rxText)) !== null) {
-    const n = parseInt(m[1], 10);
-    if (n < 1 || n > 20) continue; // ignore implausible doses
-    const unit = /cap/i.test(m[2]) ? "Capsule" : "Tablet";
-    doses.push(`${n} ${unit}`);
-  }
-  return doses;
-}
-
-/**
- * Collect all X-X-X frequency strings in document order.
- * Uses single-digit slots (0–9) which is standard for M-A-N notation.
- */
-function extractAllFrequenciesFromSection(rxText) {
-  const freqs = [];
-  const re = /\b(\d)\s*[-–—]\s*(\d)\s*[-–—]\s*(\d)\b/g;
-  let m;
-  while ((m = re.exec(rxText)) !== null) {
-    freqs.push(`${m[1]}-${m[2]}-${m[3]}`);
-  }
-  return freqs;
-}
-
-/**
- * Collect "After Food" / "Before Food" instructions in document order.
- */
-function extractAllInstructionsFromSection(rxText) {
-  const insts = [];
-  const re = /\b(after\s+food|before\s+food|with\s+food|after\s+meal|before\s+meal)\b/gi;
-  let m;
-  while ((m = re.exec(rxText)) !== null) {
-    const v = m[0].toLowerCase();
-    insts.push(v.includes("before") ? "Before Food" : v.includes("with") ? "With Food" : "After Food");
-  }
-  return insts;
-}
-
-/**
- * Hybrid extraction:
- *  - Dose + Frequency + Instruction: per-medicine block (each medicine's name
- *    line to the next). These columns are read by OCR close to the medicine
- *    name, so the block approach is reliable.
- *  - Duration + Qty: extracted globally from the entire Rx section using
- *    extractAllDurationQtyPairs and matched by index order.
- *
- * WHY HYBRID?
- * Tabular prescriptions often have their rightmost columns (Duration, Qty)
- * read by OCR as a separate visual text block, placed AFTER all the
- * left-side column data.  For medicines 1–5 that all share the same duration
- * (6 Month(s)), the per-block approach accidentally picks the right value.
- * For medicines 6–10 with different durations, the per-block window ends
- * before reaching the correct Duration/Qty text → wrong values.
- * The global pairs approach reads the entire Duration+Qty column in document
- * order and matches it to medicines by position, giving the correct result
- * regardless of where OCR placed those values.
- */
-/* ============================================================
- * SPATIAL (BOUNDING-BOX) EXTRACTION
- * Uses Google Vision word-level coordinates to reconstruct each
- * table row as a single text string, then parses name/dose/freq/
- * instruction/duration/qty from that row.  Because all data for
- * one medicine is grouped by Y-position before parsing, there is
- * no risk of values being assigned to the wrong medicine.
- * ============================================================ */
-
-/**
- * Flatten all Vision API words to {text, midX, midY, height} objects.
- */
-function extractWordsWithPositions(fullTextAnnotation) {
-  const words = [];
-  if (!fullTextAnnotation?.pages) return words;
-
-  for (const page of fullTextAnnotation.pages) {
-    for (const block of page.blocks || []) {
-      for (const para of block.paragraphs || []) {
-        for (const word of para.words || []) {
-          const txt = (word.symbols || []).map(s => s.text).join("").trim();
-          if (!txt) continue;
-
-          const verts = word.boundingBox?.vertices || [];
-          if (verts.length < 4) continue;
-
-          const ys = verts.map(v => v.y || 0);
-          const xs = verts.map(v => v.x || 0);
-          words.push({
-            text:   txt,
-            midY:   (Math.min(...ys) + Math.max(...ys)) / 2,
-            midX:   (Math.min(...xs) + Math.max(...xs)) / 2,
-            height: Math.max(...ys) - Math.min(...ys),
-          });
-        }
-      }
-    }
-  }
-  return words;
-}
-
-/**
- * Group words into rows using a given Y tolerance.
- * Returns {text, avgY, words} objects sorted top-to-bottom.
- */
-function groupWordsIntoRowObjects(sortedWords, tol) {
-  const rows = [];
-  if (!sortedWords.length) return rows;
-
-  let row  = [sortedWords[0]];
-  let refY = sortedWords[0].midY; // fixed anchor — no drift
-
-  for (let i = 1; i < sortedWords.length; i++) {
-    const w = sortedWords[i];
-    if (Math.abs(w.midY - refY) <= tol) {
-      row.push(w);
-    } else {
-      row.sort((a, b) => a.midX - b.midX);
-      rows.push({
-        text:  row.map(x => x.text).join(" "),
-        avgY:  row.reduce((s, x) => s + x.midY, 0) / row.length,
-        words: row,
-      });
-      row  = [w];
-      refY = w.midY;
-    }
-  }
-  row.sort((a, b) => a.midX - b.midX);
-  rows.push({
-    text:  row.map(x => x.text).join(" "),
-    avgY:  row.reduce((s, x) => s + x.midY, 0) / row.length,
-    words: row,
-  });
-  return rows;
-}
-
-/**
- * Spatial extraction — two-pass distortion-tolerant approach.
- *
- * Pass 1 (TIGHT tolerance): find the Y-anchor for every medicine-name line.
- *   Tight grouping keeps the header row / dose lines / name lines separate,
- *   letting looksLikeMedicineLine reliably identify medicine rows.
- *
- * Pass 2 (WIDE tolerance): for each medicine anchor, collect ALL words
- *   within a larger vertical window.  A photographed prescription with
- *   moderate perspective tilt can shift the Duration/Qty column 15-25 px
- *   lower than the medicine name column.  The wide window captures those
- *   distant columns so every medicine gets its own complete row text,
- *   including dose, frequency, instruction, duration and qty.
- */
-function extractMedicineRowsFromPrescriptionSpatial(fullTextAnnotation) {
-  const words = extractWordsWithPositions(fullTextAnnotation);
-  if (!words.length) return null;
-
-  const avgH   = words.reduce((s, w) => s + w.height, 0) / words.length;
-  // tightTol: small enough to keep adjacent rows separate (≈ half word height)
-  const tightT = Math.max(avgH * 0.5, 6);
-  // wideTol: large enough to absorb perspective distortion across the full
-  // table width while still staying within one row's vertical band.
-  // Using 1.8× word height (≈ 25-36 px for typical prescription fonts)
-  // gives ~40 % of the typical line-spacing budget without merging rows.
-  const wideT  = Math.max(avgH * 1.8, 20);
-
-  const sortedByY = [...words].sort((a, b) => a.midY - b.midY);
-
-  // Pass 1: tight rows → identify medicine-anchor rows
-  const tightRows     = groupWordsIntoRowObjects(sortedByY, tightT);
-  const medAnchors    = tightRows.filter(r => looksLikeMedicineLine(r.text));
-
-  console.log(`📐 Spatial: ${words.length} words | tightT=${tightT.toFixed(1)} → ${tightRows.length} rows | ${medAnchors.length} medicine anchors`);
-  if (!medAnchors.length) return null;
+function extractMedicineRowsFromPrescription(text) {
+  const rawLines = text
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
 
   const medicines = [];
 
-  // Pass 2: NEAREST-ANCHOR assignment.
-  // Every word is assigned to the medicine anchor whose Y it is closest to,
-  // provided it is within wideT.  This prevents adjacent rows from bleeding
-  // into each other (which happened with the old fixed-window approach when
-  // two medicine anchors were within 2×wideT of each other).
-  const bins = medAnchors.map(() => /** @type {typeof words} */ ([]));
-
-  for (const word of words) {
-    let closestK = 0;
-    let minDist  = Infinity;
-    for (let k = 0; k < medAnchors.length; k++) {
-      const d = Math.abs(word.midY - medAnchors[k].avgY);
-      if (d < minDist) { minDist = d; closestK = k; }
-    }
-    // Only include if within wideT — excludes investigation results / far text
-    if (minDist <= wideT) bins[closestK].push(word);
-  }
-
-  for (let k = 0; k < medAnchors.length; k++) {
-    const rowWords = bins[k].sort((a, b) => a.midX - b.midX);
-    const rowText  = rowWords.map(w => w.text).join(" ");
-
-    const medicineName = extractMedicineNameFromBlock(rowText);
-    if (!medicineName || medicineName.length < 3) continue;
-
-    const dose            = extractDoseFromBlock(rowText);
-    const frequency       = extractFrequencyFromBlock(rowText, [rowText]);
-    const instruction     = extractInstructionFromBlock(rowText);
-    const durationLabel   = extractDurationFromBlock(rowText, [rowText]);
-    const durationDays    = getDurationDays(durationLabel);
-    const prescriptionQty = extractPrescriptionQty(rowText);
-
-    console.log(`  ✅ [anchor Y=${medAnchors[k].avgY.toFixed(0)}] ${medicineName}: ${dose}, ${frequency}, ${durationLabel}(${durationDays}d), qty=${prescriptionQty}`);
-
-    medicines.push({
-      medicineName,
-      name:          medicineName,
-      dose:          dose          || "",
-      frequency:     frequency     || "",
-      freqLabel:     frequency     || "",
-      instruction:   instruction   || "",
-      duration:      durationDays,
-      durationDays,
-      durationLabel: durationLabel || "",
-      prescriptionQty: prescriptionQty || null,
-    });
-  }
-
-  // Deduplicate by normalised name
-  const unique = [];
-  for (const med of medicines) {
-    const key = normalizeMedicineName(med.medicineName);
-    if (!unique.some(u => normalizeMedicineName(u.medicineName) === key)) unique.push(med);
-  }
-
-  console.log(`📐 Spatial extraction complete: ${unique.length} unique medicines`);
-  return unique.length > 0 ? unique : null;
-}
-
-/* ============================================================
- * TEXT-BASED EXTRACTION (fallback for PDFs / no spatial data)
- * ============================================================ */
-
-function extractMedicineRowsFromPrescription(text) {
-  // Crop to Rx section — excludes "Next followup after 6 Month(s)" and
-  // investigation results that would contaminate duration extraction.
-  const rxText   = extractRxSection(text);
-  const rawLines = rxText.split(/\n/).map(l => l.trim()).filter(Boolean);
-
-  // Medicine NAME line indices only (dose lines rejected by looksLikeMedicineLine)
-  const medLineIndices = [];
   for (let i = 0; i < rawLines.length; i++) {
-    if (looksLikeMedicineLine(rawLines[i])) medLineIndices.push(i);
-  }
-
-  // ── Fix: search for global pairs starting AFTER the first medicine name ────
-  // Some OCRs merge the column header row ("Duration | Qty.") with the first
-  // data row, producing a spurious extra pair BEFORE the first medicine name.
-  // That extra pair makes globalPairs.length = N+1, causing useGlobalPairs=false
-  // and triggering the broken segment-search path.
-  // Searching only from the first medicine line onwards removes those header pairs.
-  let pairsSearchText = text;
-  if (medLineIndices.length > 0) {
-    const firstMedLineContent = rawLines[medLineIndices[0]];
-    const firstMedPos = text.indexOf(firstMedLineContent);
-    if (firstMedPos > 0) pairsSearchText = text.substring(firstMedPos);
-  }
-  // Full OCR text from first medicine (not just rxText) so Duration+Qty columns
-  // that the OCR places after footer text ("All Medications are…") are still found.
-  const globalPairs = extractAllDurationQtyPairs(pairsSearchText);
-
-  // Global frequency list — Rx section in document order.
-  const globalFreqs = extractAllFrequenciesFromSection(rxText);
-
-  // Phase 1: build per-block data for every detected medicine line
-  const rawMedicines = [];
-
-  for (let mi = 0; mi < medLineIndices.length; mi++) {
-    const i           = medLineIndices[mi];
     const currentLine = rawLines[i];
 
-    const nextMedLine = mi + 1 < medLineIndices.length
-      ? medLineIndices[mi + 1]
-      : rawLines.length;
-    const blockEnd  = Math.min(nextMedLine, i + 20);
-    const nextLines = rawLines.slice(i, blockEnd);
-    const block     = nextLines.join(" ");
+    if (!looksLikeMedicineLine(currentLine)) continue;
+
+    const nextLines = rawLines.slice(i, i + 8);
+    const block = nextLines.join(" ");
 
     const medicineName = extractMedicineNameFromBlock(currentLine);
+    const dose = extractDoseFromBlock(block);
+    const frequency = extractFrequencyFromBlock(block, nextLines);
+    const instruction = extractInstructionFromBlock(block);
+    const durationLabel = extractDurationFromBlock(block, nextLines);
+    const durationDays = getDurationDays(durationLabel);
+    const prescriptionQty = extractPrescriptionQty(block);
+
     if (!medicineName || medicineName.length < 3) continue;
 
-    rawMedicines.push({
+    const row = {
       medicineName,
-      rawLineContent:     currentLine,
-      nextRawLineContent: mi + 1 < medLineIndices.length ? rawLines[medLineIndices[mi + 1]] : null,
-      dose:               extractDoseFromBlock(block)          || "",
-      blockFrequency:     extractFrequencyFromBlock(block, nextLines),
-      instruction:        extractInstructionFromBlock(block)   || "",
-      blockDurLabel:      extractDurationFromBlock(block, nextLines),
-      blockDurDays:       getDurationDays(extractDurationFromBlock(block, nextLines)),
-      blockQty:           extractPrescriptionQty(block),
-    });
-  }
+      name: medicineName,
 
-  // Phase 2: deduplicate by normalised name
-  const unique = [];
-  for (const med of rawMedicines) {
-    const key = normalizeMedicineName(med.medicineName);
-    if (!unique.some(u => normalizeMedicineName(u.medicineName) === key)) unique.push(med);
-  }
+      dose: dose || "",
+      frequency: frequency || "",
+      freqLabel: frequency || "",
+      instruction: instruction || "",
 
-  // ── Fix: compare against UNIQUE count, not raw medLineIndices count ────────
-  // If the OCR produces a duplicate medicine-name line (e.g. both "3. TABLET X"
-  // and "TABLET X" are detected), medLineIndices.length = N+1 while
-  // unique.length = N. Using medLineIndices.length caused useGlobalPairs=false
-  // even when globalPairs had exactly N valid pairs.
-  const useGlobalFreqs = globalFreqs.length === unique.length;
-  const useGlobalPairs = globalPairs.length === unique.length;
-
-  console.log(`📋 Rx: ${rxText.length}chars | raw:${medLineIndices.length} unique:${unique.length} freqs:${globalFreqs.length}${useGlobalFreqs?"✓":"✗"} pairs:${globalPairs.length}${useGlobalPairs?"✓":"✗"}`);
-  console.log("  Global freqs:", globalFreqs);
-  console.log("  Global pairs:", JSON.stringify(globalPairs));
-
-  // Phase 3: assign frequency + duration/qty to each unique medicine
-  const result = unique.map((med, mi) => {
-    // Frequency
-    const gf = mi < globalFreqs.length ? globalFreqs[mi] : null;
-    const frequency = useGlobalFreqs
-      ? (gf || med.blockFrequency || "")
-      : (med.blockFrequency || gf || "");
-
-    // Duration + Qty
-    let gp;
-    if (useGlobalPairs) {
-      gp = mi < globalPairs.length ? globalPairs[mi] : null;
-    } else {
-      // Count mismatch: segment-based search (avoids swapping adjacent medicines)
-      gp = extractDurationQtyForMedicine(text, med.rawLineContent, med.nextRawLineContent);
-    }
-
-    const durationDays    = (gp?.durationDays)    || med.blockDurDays  || 0;
-    const durationLabel   = (gp?.durationLabel)   || med.blockDurLabel || "";
-    const prescriptionQty = (gp?.prescriptionQty) || med.blockQty      || null;
-
-    console.log(`  [${mi+1}] ${med.medicineName}: ${med.dose||"-"}, freq=${frequency||"-"}${useGlobalFreqs?"(G)":"(B)"}, ${durationLabel||"-"}(${durationDays}d), qty=${prescriptionQty}`);
-
-    return {
-      medicineName:    med.medicineName,
-      name:            med.medicineName,
-      dose:            med.dose,
-      frequency:       frequency || "",
-      freqLabel:       frequency || "",
-      instruction:     med.instruction,
-      duration:        durationDays,
+      // duration is days number
+      duration: durationDays,
       durationDays,
-      durationLabel:   durationLabel || "",
+
+      // original text from prescription
+      durationLabel: durationLabel || "",
+
+      // Qty as explicitly written in the prescription Qty column
       prescriptionQty: prescriptionQty || null,
     };
-  });
 
-  console.log(`✅ ${result.length} medicines extracted`);
-  return result;
+    medicines.push(row);
+  }
+
+  const unique = [];
+
+  for (const med of medicines) {
+    const key = normalizeMedicineName(med.medicineName);
+
+    const exists = unique.some(
+      (item) => normalizeMedicineName(item.medicineName) === key
+    );
+
+    if (!exists) unique.push(med);
+  }
+
+  return unique;
 }
 
 function extractMedicineNameFromBlock(line = "") {
@@ -1140,11 +1396,6 @@ async function matchMedicinesWithDatabase(extractedMedicines) {
 
           price: bestMatch.newMrp || bestMatch.price || 0,
           mrp: bestMatch.newMrp || bestMatch.mrp || 0,
-          newMrp: bestMatch.newMrp || 0,
-
-          // DB stored batch-level values (as-is from medicine document)
-          netValue: bestMatch.netValue || 0,
-          taxableValue: bestMatch.taxableValue || 0,
 
           // Stock is only display info, not matching condition
           qty: bestMatch.qty || 0,
@@ -1183,6 +1434,3 @@ async function matchMedicinesWithDatabase(extractedMedicines) {
 
   return matched;
 }
-
-
-
