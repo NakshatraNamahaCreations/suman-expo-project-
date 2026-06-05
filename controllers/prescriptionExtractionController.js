@@ -700,31 +700,32 @@ function extractMedicineRowsFromPrescription(text) {
     if (looksLikeMedicineLine(rawLines[i])) medLineIndices.push(i);
   }
 
-  // Global duration-qty pairs — full OCR text (not just rxText) so the
-  // Duration+Qty column is found even when OCR places it after footer text.
-  const globalPairs = extractAllDurationQtyPairs(text);
+  // ── Fix: search for global pairs starting AFTER the first medicine name ────
+  // Some OCRs merge the column header row ("Duration | Qty.") with the first
+  // data row, producing a spurious extra pair BEFORE the first medicine name.
+  // That extra pair makes globalPairs.length = N+1, causing useGlobalPairs=false
+  // and triggering the broken segment-search path.
+  // Searching only from the first medicine line onwards removes those header pairs.
+  let pairsSearchText = text;
+  if (medLineIndices.length > 0) {
+    const firstMedLineContent = rawLines[medLineIndices[0]];
+    const firstMedPos = text.indexOf(firstMedLineContent);
+    if (firstMedPos > 0) pairsSearchText = text.substring(firstMedPos);
+  }
+  // Full OCR text from first medicine (not just rxText) so Duration+Qty columns
+  // that the OCR places after footer text ("All Medications are…") are still found.
+  const globalPairs = extractAllDurationQtyPairs(pairsSearchText);
 
-  // Global frequency list — full Rx section in document order.
+  // Global frequency list — Rx section in document order.
   const globalFreqs = extractAllFrequenciesFromSection(rxText);
 
-  // When the global array count matches the medicine count exactly,
-  // OCR read every value in medicine order → use global as PRIMARY source
-  // for that column (guarantees row-wise alignment).
-  // When counts differ (OCR missed or added a value), per-block is safer.
-  const useGlobalFreqs = globalFreqs.length === medLineIndices.length;
-  const useGlobalPairs = globalPairs.length === medLineIndices.length;
-
-  console.log(`📋 Rx: ${rxText.length}chars | medicines:${medLineIndices.length} freqs:${globalFreqs.length}${useGlobalFreqs ? "✓" : "✗"} pairs:${globalPairs.length}${useGlobalPairs ? "✓" : "✗"}`);
-  console.log("  Global freqs:", globalFreqs);
-  console.log("  Global pairs:", JSON.stringify(globalPairs));
-
-  const medicines = [];
+  // Phase 1: build per-block data for every detected medicine line
+  const rawMedicines = [];
 
   for (let mi = 0; mi < medLineIndices.length; mi++) {
     const i           = medLineIndices[mi];
     const currentLine = rawLines[i];
 
-    // Per-block for dose + instruction (always correct — close to name line)
     const nextMedLine = mi + 1 < medLineIndices.length
       ? medLineIndices[mi + 1]
       : rawLines.length;
@@ -735,66 +736,77 @@ function extractMedicineRowsFromPrescription(text) {
     const medicineName = extractMedicineNameFromBlock(currentLine);
     if (!medicineName || medicineName.length < 3) continue;
 
-    const dose        = extractDoseFromBlock(block);
-    const instruction = extractInstructionFromBlock(block);
-
-    // ── Frequency ────────────────────────────────────────────────────────────
-    const blockFrequency = extractFrequencyFromBlock(block, nextLines);
-    const gf             = mi < globalFreqs.length ? globalFreqs[mi] : null;
-    // If global count matches: global is primary (row-wise guaranteed).
-    // Otherwise: per-block is primary, global is fallback.
-    const frequency = useGlobalFreqs
-      ? (gf || blockFrequency || "")
-      : (blockFrequency || gf || "");
-
-    // ── Duration + Qty ────────────────────────────────────────────────────────
-    const blockDurLabel = extractDurationFromBlock(block, nextLines);
-    const blockDurDays  = getDurationDays(blockDurLabel);
-    const blockQty      = extractPrescriptionQty(block);
-
-    let gp;
-    if (useGlobalPairs) {
-      // Exact count match: indexed assignment is reliable (column-clustered OCR)
-      gp = mi < globalPairs.length ? globalPairs[mi] : null;
-    } else {
-      // Count mismatch: one or more medicines are missing a pair in the
-      // global array. Pure indexed assignment would swap adjacent medicines.
-      // Instead, search for this medicine's pair in its own full-text segment.
-      const nextMedOcrLine = mi + 1 < medLineIndices.length
-        ? rawLines[medLineIndices[mi + 1]]
-        : null;
-      gp = extractDurationQtyForMedicine(text, rawLines[i], nextMedOcrLine);
-    }
-
-    const durationDays    = (gp?.durationDays)    || blockDurDays  || 0;
-    const durationLabel   = (gp?.durationLabel)   || blockDurLabel || "";
-    const prescriptionQty = (gp?.prescriptionQty) || blockQty      || null;
-
-    console.log(`  [${mi+1}] ${medicineName}: ${dose||"-"}, freq=${frequency||"-"}${useGlobalFreqs ? "(G)" : "(B)"}, ${durationLabel||"-"}(${durationDays}d), qty=${prescriptionQty}`);
-
-    medicines.push({
+    rawMedicines.push({
       medicineName,
-      name:          medicineName,
-      dose:          dose        || "",
-      frequency:     frequency   || "",
-      freqLabel:     frequency   || "",
-      instruction:   instruction || "",
-      duration:      durationDays,
-      durationDays,
-      durationLabel: durationLabel || "",
-      prescriptionQty: prescriptionQty || null,
+      rawLineContent:     currentLine,
+      nextRawLineContent: mi + 1 < medLineIndices.length ? rawLines[medLineIndices[mi + 1]] : null,
+      dose:               extractDoseFromBlock(block)          || "",
+      blockFrequency:     extractFrequencyFromBlock(block, nextLines),
+      instruction:        extractInstructionFromBlock(block)   || "",
+      blockDurLabel:      extractDurationFromBlock(block, nextLines),
+      blockDurDays:       getDurationDays(extractDurationFromBlock(block, nextLines)),
+      blockQty:           extractPrescriptionQty(block),
     });
   }
 
-  // Deduplicate by normalised name
+  // Phase 2: deduplicate by normalised name
   const unique = [];
-  for (const med of medicines) {
+  for (const med of rawMedicines) {
     const key = normalizeMedicineName(med.medicineName);
     if (!unique.some(u => normalizeMedicineName(u.medicineName) === key)) unique.push(med);
   }
 
-  console.log(`✅ ${unique.length} medicines extracted`);
-  return unique;
+  // ── Fix: compare against UNIQUE count, not raw medLineIndices count ────────
+  // If the OCR produces a duplicate medicine-name line (e.g. both "3. TABLET X"
+  // and "TABLET X" are detected), medLineIndices.length = N+1 while
+  // unique.length = N. Using medLineIndices.length caused useGlobalPairs=false
+  // even when globalPairs had exactly N valid pairs.
+  const useGlobalFreqs = globalFreqs.length === unique.length;
+  const useGlobalPairs = globalPairs.length === unique.length;
+
+  console.log(`📋 Rx: ${rxText.length}chars | raw:${medLineIndices.length} unique:${unique.length} freqs:${globalFreqs.length}${useGlobalFreqs?"✓":"✗"} pairs:${globalPairs.length}${useGlobalPairs?"✓":"✗"}`);
+  console.log("  Global freqs:", globalFreqs);
+  console.log("  Global pairs:", JSON.stringify(globalPairs));
+
+  // Phase 3: assign frequency + duration/qty to each unique medicine
+  const result = unique.map((med, mi) => {
+    // Frequency
+    const gf = mi < globalFreqs.length ? globalFreqs[mi] : null;
+    const frequency = useGlobalFreqs
+      ? (gf || med.blockFrequency || "")
+      : (med.blockFrequency || gf || "");
+
+    // Duration + Qty
+    let gp;
+    if (useGlobalPairs) {
+      gp = mi < globalPairs.length ? globalPairs[mi] : null;
+    } else {
+      // Count mismatch: segment-based search (avoids swapping adjacent medicines)
+      gp = extractDurationQtyForMedicine(text, med.rawLineContent, med.nextRawLineContent);
+    }
+
+    const durationDays    = (gp?.durationDays)    || med.blockDurDays  || 0;
+    const durationLabel   = (gp?.durationLabel)   || med.blockDurLabel || "";
+    const prescriptionQty = (gp?.prescriptionQty) || med.blockQty      || null;
+
+    console.log(`  [${mi+1}] ${med.medicineName}: ${med.dose||"-"}, freq=${frequency||"-"}${useGlobalFreqs?"(G)":"(B)"}, ${durationLabel||"-"}(${durationDays}d), qty=${prescriptionQty}`);
+
+    return {
+      medicineName:    med.medicineName,
+      name:            med.medicineName,
+      dose:            med.dose,
+      frequency:       frequency || "",
+      freqLabel:       frequency || "",
+      instruction:     med.instruction,
+      duration:        durationDays,
+      durationDays,
+      durationLabel:   durationLabel || "",
+      prescriptionQty: prescriptionQty || null,
+    };
+  });
+
+  console.log(`✅ ${result.length} medicines extracted`);
+  return result;
 }
 
 function extractMedicineNameFromBlock(line = "") {
