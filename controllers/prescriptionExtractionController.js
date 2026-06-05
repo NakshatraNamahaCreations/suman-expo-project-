@@ -1096,7 +1096,7 @@ function extractPrescriptionQty(block = "") {
  */
 function extractAllDurationQtyPairs(text) {
   const pairs = [];
-  const pattern = /(\d+)\s*(?:month(?:s|\(s\))?|day(?:s|\(s\))?|week(?:s|\(s\))?)\s+(\d{1,4})(?!\s*[\d\/])/gi;
+  const pattern = /(\d+)\s*(?:month(?:s|\(s\))?|day(?:s|\(s\))?|week(?:s|\(s\))?)\s+(\d{1,4})(?![\d\/])/gi;
   let match;
   while ((match = pattern.exec(text)) !== null) {
     const num = parseInt(match[1], 10);
