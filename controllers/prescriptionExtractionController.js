@@ -740,70 +740,97 @@ function extractWordsWithPositions(fullTextAnnotation) {
 }
 
 /**
- * Group words into horizontal rows by Y proximity.
- * Returns rows sorted top-to-bottom; each row is a single space-joined
- * text string with words sorted left-to-right.
+ * Group words into rows using a given Y tolerance.
+ * Returns {text, avgY, words} objects sorted top-to-bottom.
  */
-function groupWordsIntoRows(words) {
-  if (!words.length) return [];
+function groupWordsIntoRowObjects(sortedWords, tol) {
+  const rows = [];
+  if (!sortedWords.length) return rows;
 
-  // Adaptive tolerance: ~60% of average word height, minimum 8 px
-  const avgH = words.reduce((s, w) => s + w.height, 0) / words.length;
-  const tol  = Math.max(avgH * 0.6, 8);
+  let row  = [sortedWords[0]];
+  let refY = sortedWords[0].midY; // fixed anchor — no drift
 
-  const sorted = [...words].sort((a, b) => a.midY - b.midY);
-  const rows   = [];
-  let   row    = [sorted[0]];
-  let   rowY   = sorted[0].midY;
-
-  for (let i = 1; i < sorted.length; i++) {
-    const w = sorted[i];
-    if (Math.abs(w.midY - rowY) <= tol) {
+  for (let i = 1; i < sortedWords.length; i++) {
+    const w = sortedWords[i];
+    if (Math.abs(w.midY - refY) <= tol) {
       row.push(w);
-      rowY = row.reduce((s, x) => s + x.midY, 0) / row.length; // running avg Y
     } else {
       row.sort((a, b) => a.midX - b.midX);
-      rows.push(row.map(x => x.text).join(" "));
+      rows.push({
+        text:  row.map(x => x.text).join(" "),
+        avgY:  row.reduce((s, x) => s + x.midY, 0) / row.length,
+        words: row,
+      });
       row  = [w];
-      rowY = w.midY;
+      refY = w.midY;
     }
   }
   row.sort((a, b) => a.midX - b.midX);
-  rows.push(row.map(x => x.text).join(" "));
-
+  rows.push({
+    text:  row.map(x => x.text).join(" "),
+    avgY:  row.reduce((s, x) => s + x.midY, 0) / row.length,
+    words: row,
+  });
   return rows;
 }
 
 /**
- * Spatial extraction entry point.
- * Returns the medicine array (same shape as the text-based extractor)
- * or null if spatial data is not available / yields no medicines.
+ * Spatial extraction — two-pass distortion-tolerant approach.
+ *
+ * Pass 1 (TIGHT tolerance): find the Y-anchor for every medicine-name line.
+ *   Tight grouping keeps the header row / dose lines / name lines separate,
+ *   letting looksLikeMedicineLine reliably identify medicine rows.
+ *
+ * Pass 2 (WIDE tolerance): for each medicine anchor, collect ALL words
+ *   within a larger vertical window.  A photographed prescription with
+ *   moderate perspective tilt can shift the Duration/Qty column 15-25 px
+ *   lower than the medicine name column.  The wide window captures those
+ *   distant columns so every medicine gets its own complete row text,
+ *   including dose, frequency, instruction, duration and qty.
  */
 function extractMedicineRowsFromPrescriptionSpatial(fullTextAnnotation) {
   const words = extractWordsWithPositions(fullTextAnnotation);
   if (!words.length) return null;
 
-  const rowTexts = groupWordsIntoRows(words);
-  console.log(`📐 Spatial rows (${rowTexts.length}):`);
-  rowTexts.forEach((r, i) => console.log(`  [${i + 1}] "${r}"`));
+  const avgH   = words.reduce((s, w) => s + w.height, 0) / words.length;
+  // tightTol: small enough to keep adjacent rows separate (≈ half word height)
+  const tightT = Math.max(avgH * 0.5, 6);
+  // wideTol: large enough to absorb perspective distortion across the full
+  // table width while still staying within one row's vertical band.
+  // Using 1.8× word height (≈ 25-36 px for typical prescription fonts)
+  // gives ~40 % of the typical line-spacing budget without merging rows.
+  const wideT  = Math.max(avgH * 1.8, 20);
+
+  const sortedByY = [...words].sort((a, b) => a.midY - b.midY);
+
+  // Pass 1: tight rows → identify medicine-anchor rows
+  const tightRows     = groupWordsIntoRowObjects(sortedByY, tightT);
+  const medAnchors    = tightRows.filter(r => looksLikeMedicineLine(r.text));
+
+  console.log(`📐 Spatial: ${words.length} words | tightT=${tightT.toFixed(1)} → ${tightRows.length} rows | ${medAnchors.length} medicine anchors`);
+  if (!medAnchors.length) return null;
 
   const medicines = [];
 
-  for (const rowText of rowTexts) {
-    if (!looksLikeMedicineLine(rowText)) continue;
+  for (const anchor of medAnchors) {
+    // Pass 2: collect ALL words within wide tolerance of this anchor's Y
+    const rowWords = words
+      .filter(w => Math.abs(w.midY - anchor.avgY) <= wideT)
+      .sort((a, b) => a.midX - b.midX);
+
+    const rowText = rowWords.map(w => w.text).join(" ");
 
     const medicineName = extractMedicineNameFromBlock(rowText);
     if (!medicineName || medicineName.length < 3) continue;
 
-    // All fields come from the SAME row — no column-index mismatch possible
-    const dose          = extractDoseFromBlock(rowText);
-    const frequency     = extractFrequencyFromBlock(rowText, [rowText]);
-    const instruction   = extractInstructionFromBlock(rowText);
-    const durationLabel = extractDurationFromBlock(rowText, [rowText]);
-    const durationDays  = getDurationDays(durationLabel);
+    const dose            = extractDoseFromBlock(rowText);
+    const frequency       = extractFrequencyFromBlock(rowText, [rowText]);
+    const instruction     = extractInstructionFromBlock(rowText);
+    const durationLabel   = extractDurationFromBlock(rowText, [rowText]);
+    const durationDays    = getDurationDays(durationLabel);
     const prescriptionQty = extractPrescriptionQty(rowText);
 
-    console.log(`  ✅ ${medicineName}: ${dose}, ${frequency}, ${durationLabel}(${durationDays}d), qty=${prescriptionQty}`);
+    console.log(`  ✅ [anchor Y=${anchor.avgY.toFixed(0)}] ${medicineName}: ${dose}, ${frequency}, ${durationLabel}(${durationDays}d), qty=${prescriptionQty}`);
 
     medicines.push({
       medicineName,
@@ -819,14 +846,14 @@ function extractMedicineRowsFromPrescriptionSpatial(fullTextAnnotation) {
     });
   }
 
-  // Deduplicate
+  // Deduplicate by normalised name
   const unique = [];
   for (const med of medicines) {
     const key = normalizeMedicineName(med.medicineName);
     if (!unique.some(u => normalizeMedicineName(u.medicineName) === key)) unique.push(med);
   }
 
-  console.log(`📐 Spatial extraction: ${unique.length} unique medicines found`);
+  console.log(`📐 Spatial extraction complete: ${unique.length} unique medicines`);
   return unique.length > 0 ? unique : null;
 }
 
