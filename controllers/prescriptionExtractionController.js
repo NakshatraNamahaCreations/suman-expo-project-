@@ -1266,18 +1266,30 @@ function extractMedicineRowsFromPrescriptionSpatial(fullTextAnnotation) {
   const words = extractWordsWithPositions(fullTextAnnotation);
   if (!words.length) return null;
 
-  const avgH   = words.reduce((s, w) => s + w.height, 0) / words.length;
-  const tightT = Math.max(avgH * 0.5, 6);
-  const wideT  = Math.max(avgH * 1.8, 20);
+  // Use only word heights from medicine-table area (filter out outliers)
+  const heights = words.map(w => w.height).filter(h => h > 0).sort((a, b) => a - b);
+  const medianH = heights[Math.floor(heights.length / 2)] || 20;
+
+  // tightT: large enough to group all words on one visual line even with
+  // phone-camera perspective tilt (words on same row can differ by up to
+  // medianH * 0.8 in Y). Too-small tightT splits "TABLET TRIPLE HEART OPEN"
+  // into single-word rows, and the "TABLET"-only row gives an empty name → skipped.
+  const tightT = Math.max(medianH * 0.8, 10);
+
+  // wideT: must reach the rightmost Duration/Qty columns which can be
+  // 30–40px further in Y than the medicine-name anchor due to perspective.
+  const wideT  = Math.max(medianH * 2.5, 35);
 
   const sortedByY  = [...words].sort((a, b) => a.midY - b.midY);
   const tightRows  = groupWordsIntoRowObjects(sortedByY, tightT);
   const medAnchors = tightRows.filter(r => looksLikeMedicineLine(r.text));
 
-  console.log(`📐 Spatial: ${words.length} words | tightT=${tightT.toFixed(1)} wideT=${wideT.toFixed(1)} | ${medAnchors.length} medicine anchors`);
+  console.log(`📐 Spatial: ${words.length} words | medianH=${medianH.toFixed(1)} tightT=${tightT.toFixed(1)} wideT=${wideT.toFixed(1)} | ${medAnchors.length} anchors`);
   if (!medAnchors.length) return null;
 
-  // Nearest-anchor: each word → closest medicine anchor (within wideT)
+  // Nearest-anchor assignment — each word goes to the medicine anchor it is
+  // Y-closest to (provided it is within wideT).  This prevents investigation-
+  // results words (far below all medicine anchors) from contaminating any row.
   const bins = medAnchors.map(() => []);
   for (const word of words) {
     let closestK = 0, minDist = Infinity;
@@ -1325,7 +1337,8 @@ function extractMedicineRowsFromPrescriptionSpatial(fullTextAnnotation) {
   }
 
   console.log(`📐 Spatial extraction: ${unique.length} unique medicines`);
-  return unique.length > 0 ? unique : null;
+  // Fall back to text-based if spatial found very few results (likely failed)
+  return unique.length >= 3 ? unique : null;
 }
 
 /* ============================================================
