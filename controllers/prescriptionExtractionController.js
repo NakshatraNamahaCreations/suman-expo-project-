@@ -665,20 +665,23 @@ function extractMedicineRowsFromPrescription(text) {
     if (looksLikeMedicineLine(rawLines[i])) medLineIndices.push(i);
   }
 
-  // Global duration-qty pairs — scanned from the FULL OCR text (not just rxText).
-  // Reason: OCR sometimes places the Duration+Qty column AFTER footer text
-  // ("All Medications are…") which causes extractRxSection to cut the Rx section
-  // short, losing duration data for the last 2–3 medicines.
+  // Global duration-qty pairs — full OCR text (not just rxText) so the
+  // Duration+Qty column is found even when OCR places it after footer text.
   const globalPairs = extractAllDurationQtyPairs(text);
 
-  // Global frequency list — fallback for medicines whose per-block window
-  // does not contain their frequency (e.g. when OCR reads the Frequency column
-  // as a separate block placed before the first medicine-name line).
+  // Global frequency list — full Rx section in document order.
   const globalFreqs = extractAllFrequenciesFromSection(rxText);
 
-  console.log(`📋 Rx: ${rxText.length}chars | ${medLineIndices.length} medicine lines | ${globalPairs.length} dur-qty pairs | ${globalFreqs.length} global freqs`);
-  console.log("  Global pairs:", JSON.stringify(globalPairs));
+  // When the global array count matches the medicine count exactly,
+  // OCR read every value in medicine order → use global as PRIMARY source
+  // for that column (guarantees row-wise alignment).
+  // When counts differ (OCR missed or added a value), per-block is safer.
+  const useGlobalFreqs = globalFreqs.length === medLineIndices.length;
+  const useGlobalPairs = globalPairs.length === medLineIndices.length;
+
+  console.log(`📋 Rx: ${rxText.length}chars | medicines:${medLineIndices.length} freqs:${globalFreqs.length}${useGlobalFreqs ? "✓" : "✗"} pairs:${globalPairs.length}${useGlobalPairs ? "✓" : "✗"}`);
   console.log("  Global freqs:", globalFreqs);
+  console.log("  Global pairs:", JSON.stringify(globalPairs));
 
   const medicines = [];
 
@@ -686,7 +689,7 @@ function extractMedicineRowsFromPrescription(text) {
     const i           = medLineIndices[mi];
     const currentLine = rawLines[i];
 
-    // Per-block for dose + frequency + instruction
+    // Per-block for dose + instruction (always correct — close to name line)
     const nextMedLine = mi + 1 < medLineIndices.length
       ? medLineIndices[mi + 1]
       : rawLines.length;
@@ -697,29 +700,31 @@ function extractMedicineRowsFromPrescription(text) {
     const medicineName = extractMedicineNameFromBlock(currentLine);
     if (!medicineName || medicineName.length < 3) continue;
 
-    const dose = extractDoseFromBlock(block);
-
-    // Frequency: try per-block first; fall back to global list by index.
-    // Global fallback handles the case where OCR outputs the Frequency column
-    // as a separate text block placed before the first medicine-name line,
-    // leaving medicine #1's per-block window empty of any X-X-X pattern.
-    const blockFrequency = extractFrequencyFromBlock(block, nextLines);
-    const frequency      = blockFrequency || (mi < globalFreqs.length ? globalFreqs[mi] : "");
-
+    const dose        = extractDoseFromBlock(block);
     const instruction = extractInstructionFromBlock(block);
 
-    // Global pair for duration + qty (indexed by medicine position)
-    const gp              = mi < globalPairs.length ? globalPairs[mi] : null;
-    const blockDurLabel   = extractDurationFromBlock(block, nextLines);
-    const blockDurDays    = getDurationDays(blockDurLabel);
-    const blockQty        = extractPrescriptionQty(block);
+    // ── Frequency ────────────────────────────────────────────────────────────
+    const blockFrequency = extractFrequencyFromBlock(block, nextLines);
+    const gf             = mi < globalFreqs.length ? globalFreqs[mi] : null;
+    // If global count matches: global is primary (row-wise guaranteed).
+    // Otherwise: per-block is primary, global is fallback.
+    const frequency = useGlobalFreqs
+      ? (gf || blockFrequency || "")
+      : (blockFrequency || gf || "");
 
-    // Global pair takes priority; per-block is used when global pair is absent
-    const durationDays    = gp?.durationDays    || blockDurDays    || 0;
-    const durationLabel   = gp?.durationLabel   || blockDurLabel   || "";
-    const prescriptionQty = gp?.prescriptionQty || blockQty        || null;
+    // ── Duration + Qty ────────────────────────────────────────────────────────
+    const gp            = mi < globalPairs.length ? globalPairs[mi] : null;
+    const blockDurLabel = extractDurationFromBlock(block, nextLines);
+    const blockDurDays  = getDurationDays(blockDurLabel);
+    const blockQty      = extractPrescriptionQty(block);
 
-    console.log(`  [${mi+1}] ${medicineName}: ${dose||"-"}, ${frequency||"-"}, ${durationLabel||"-"}(${durationDays}d), qty=${prescriptionQty}`);
+    // If global count matches: global is primary (row-wise guaranteed).
+    // Otherwise: global still takes priority over per-block (more reliable).
+    const durationDays    = (gp?.durationDays)    || blockDurDays  || 0;
+    const durationLabel   = (gp?.durationLabel)   || blockDurLabel || "";
+    const prescriptionQty = (gp?.prescriptionQty) || blockQty      || null;
+
+    console.log(`  [${mi+1}] ${medicineName}: ${dose||"-"}, freq=${frequency||"-"}${useGlobalFreqs ? "(G)" : "(B)"}, ${durationLabel||"-"}(${durationDays}d), qty=${prescriptionQty}`);
 
     medicines.push({
       medicineName,
