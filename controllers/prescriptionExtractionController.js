@@ -1396,6 +1396,12 @@ async function matchMedicinesWithDatabase(extractedMedicines) {
 
           price: bestMatch.newMrp || bestMatch.price || 0,
           mrp: bestMatch.newMrp || bestMatch.mrp || 0,
+          newMrp: bestMatch.newMrp || 0,
+
+          // DB stored values — send as-is (no MRP fallback so the app
+          // shows the actual netValue, not the per-unit price)
+          netValue:     bestMatch.netValue     || 0,
+          taxableValue: bestMatch.taxableValue || 0,
 
           // Stock is only display info, not matching condition
           qty: bestMatch.qty || 0,
