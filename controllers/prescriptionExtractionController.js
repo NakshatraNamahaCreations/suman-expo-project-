@@ -812,13 +812,27 @@ function extractMedicineRowsFromPrescriptionSpatial(fullTextAnnotation) {
 
   const medicines = [];
 
-  for (const anchor of medAnchors) {
-    // Pass 2: collect ALL words within wide tolerance of this anchor's Y
-    const rowWords = words
-      .filter(w => Math.abs(w.midY - anchor.avgY) <= wideT)
-      .sort((a, b) => a.midX - b.midX);
+  // Pass 2: NEAREST-ANCHOR assignment.
+  // Every word is assigned to the medicine anchor whose Y it is closest to,
+  // provided it is within wideT.  This prevents adjacent rows from bleeding
+  // into each other (which happened with the old fixed-window approach when
+  // two medicine anchors were within 2×wideT of each other).
+  const bins = medAnchors.map(() => /** @type {typeof words} */ ([]));
 
-    const rowText = rowWords.map(w => w.text).join(" ");
+  for (const word of words) {
+    let closestK = 0;
+    let minDist  = Infinity;
+    for (let k = 0; k < medAnchors.length; k++) {
+      const d = Math.abs(word.midY - medAnchors[k].avgY);
+      if (d < minDist) { minDist = d; closestK = k; }
+    }
+    // Only include if within wideT — excludes investigation results / far text
+    if (minDist <= wideT) bins[closestK].push(word);
+  }
+
+  for (let k = 0; k < medAnchors.length; k++) {
+    const rowWords = bins[k].sort((a, b) => a.midX - b.midX);
+    const rowText  = rowWords.map(w => w.text).join(" ");
 
     const medicineName = extractMedicineNameFromBlock(rowText);
     if (!medicineName || medicineName.length < 3) continue;
@@ -830,7 +844,7 @@ function extractMedicineRowsFromPrescriptionSpatial(fullTextAnnotation) {
     const durationDays    = getDurationDays(durationLabel);
     const prescriptionQty = extractPrescriptionQty(rowText);
 
-    console.log(`  ✅ [anchor Y=${anchor.avgY.toFixed(0)}] ${medicineName}: ${dose}, ${frequency}, ${durationLabel}(${durationDays}d), qty=${prescriptionQty}`);
+    console.log(`  ✅ [anchor Y=${medAnchors[k].avgY.toFixed(0)}] ${medicineName}: ${dose}, ${frequency}, ${durationLabel}(${durationDays}d), qty=${prescriptionQty}`);
 
     medicines.push({
       medicineName,
