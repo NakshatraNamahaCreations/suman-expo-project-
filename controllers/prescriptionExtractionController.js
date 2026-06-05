@@ -546,6 +546,41 @@ function extractAllDurationQtyPairs(text) {
 }
 
 /**
+ * Search the FULL OCR text for the Duration+Qty pair that belongs to a
+ * specific medicine by scanning the text segment between that medicine's
+ * OCR line and the next medicine's OCR line.
+ *
+ * WHY: when globalPairs count doesn't match medicine count (e.g. one
+ * medicine's qty is unreadable so only N-1 pairs exist), pure indexed
+ * matching causes a swap — medicine N-1 gets medicine N's pair.
+ * This function avoids that by searching each medicine's own text segment.
+ */
+function extractDurationQtyForMedicine(fullText, medLine, nextMedLine) {
+  const startPos = fullText.indexOf(medLine);
+  if (startPos < 0) return null;
+
+  // End: next medicine's name line, OR an investigation/footer marker
+  let endPos = fullText.length;
+  if (nextMedLine) {
+    const nextPos = fullText.indexOf(nextMedLine, startPos + medLine.length);
+    if (nextPos > startPos) endPos = nextPos;
+  }
+  for (const re of [
+    /Investigation\s+Results?/i,
+    /All\s+Medications\s+are/i,
+    /Next\s+followup/i,
+    /\bR\s*G\s+Pharma\b/i,
+  ]) {
+    const idx = fullText.search(re);
+    if (idx > startPos && idx < endPos) endPos = idx;
+  }
+
+  const segment = fullText.substring(startPos, endPos);
+  const pairs   = extractAllDurationQtyPairs(segment);
+  return pairs.length > 0 ? pairs[0] : null;
+}
+
+/**
  * Crop the raw OCR text to just the Rx table section.
  * Stops before investigation results, followup notes, and footer text
  * so those lines cannot contaminate the medicine data.
@@ -713,13 +748,24 @@ function extractMedicineRowsFromPrescription(text) {
       : (blockFrequency || gf || "");
 
     // ── Duration + Qty ────────────────────────────────────────────────────────
-    const gp            = mi < globalPairs.length ? globalPairs[mi] : null;
     const blockDurLabel = extractDurationFromBlock(block, nextLines);
     const blockDurDays  = getDurationDays(blockDurLabel);
     const blockQty      = extractPrescriptionQty(block);
 
-    // If global count matches: global is primary (row-wise guaranteed).
-    // Otherwise: global still takes priority over per-block (more reliable).
+    let gp;
+    if (useGlobalPairs) {
+      // Exact count match: indexed assignment is reliable (column-clustered OCR)
+      gp = mi < globalPairs.length ? globalPairs[mi] : null;
+    } else {
+      // Count mismatch: one or more medicines are missing a pair in the
+      // global array. Pure indexed assignment would swap adjacent medicines.
+      // Instead, search for this medicine's pair in its own full-text segment.
+      const nextMedOcrLine = mi + 1 < medLineIndices.length
+        ? rawLines[medLineIndices[mi + 1]]
+        : null;
+      gp = extractDurationQtyForMedicine(text, rawLines[i], nextMedOcrLine);
+    }
+
     const durationDays    = (gp?.durationDays)    || blockDurDays  || 0;
     const durationLabel   = (gp?.durationLabel)   || blockDurLabel || "";
     const prescriptionQty = (gp?.prescriptionQty) || blockQty      || null;
