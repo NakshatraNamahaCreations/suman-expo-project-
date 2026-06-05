@@ -131,11 +131,15 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
 
       if (result.fullTextAnnotation && result.fullTextAnnotation.text) {
         extractedText = result.fullTextAnnotation.text;
+        // Attach the full Vision annotation so the spatial extractor can use it
+        result._fullAnnotation = result.fullTextAnnotation;
       } else if (result.textAnnotations && result.textAnnotations.length > 0) {
         extractedText = result.textAnnotations
           .map((item) => item.description)
           .join("\n");
       }
+      // Store the Vision result for spatial extraction below
+      req._visionResult = result;
     } catch (ocrError) {
       console.error("❌ OCR Error:", ocrError.message);
 
@@ -200,7 +204,13 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
     console.log(extractedText);
     console.log("🧾 RAW OCR TEXT END\n");
 
-    const extractedMedicines = extractMedicineRowsFromPrescription(extractedText);
+    // Primary: spatial (bounding-box) row extraction — groups Vision words by
+    // Y-coordinate so each medicine row's name, dose, freq, duration, qty are
+    // parsed together and cannot be cross-contaminated by adjacent rows.
+    // Fallback: text-based extraction (for PDFs / non-spatial responses).
+    const visionAnnotation = req._visionResult?.fullTextAnnotation || req._visionResult?._fullAnnotation;
+    const extractedMedicines = extractMedicineRowsFromPrescriptionSpatial(visionAnnotation)
+      || extractMedicineRowsFromPrescription(extractedText);
 
     console.log("🧾 FINAL OCR MEDICINES:", JSON.stringify(extractedMedicines, null, 2));
 
@@ -688,6 +698,142 @@ function extractAllInstructionsFromSection(rxText) {
  * order and matches it to medicines by position, giving the correct result
  * regardless of where OCR placed those values.
  */
+/* ============================================================
+ * SPATIAL (BOUNDING-BOX) EXTRACTION
+ * Uses Google Vision word-level coordinates to reconstruct each
+ * table row as a single text string, then parses name/dose/freq/
+ * instruction/duration/qty from that row.  Because all data for
+ * one medicine is grouped by Y-position before parsing, there is
+ * no risk of values being assigned to the wrong medicine.
+ * ============================================================ */
+
+/**
+ * Flatten all Vision API words to {text, midX, midY, height} objects.
+ */
+function extractWordsWithPositions(fullTextAnnotation) {
+  const words = [];
+  if (!fullTextAnnotation?.pages) return words;
+
+  for (const page of fullTextAnnotation.pages) {
+    for (const block of page.blocks || []) {
+      for (const para of block.paragraphs || []) {
+        for (const word of para.words || []) {
+          const txt = (word.symbols || []).map(s => s.text).join("").trim();
+          if (!txt) continue;
+
+          const verts = word.boundingBox?.vertices || [];
+          if (verts.length < 4) continue;
+
+          const ys = verts.map(v => v.y || 0);
+          const xs = verts.map(v => v.x || 0);
+          words.push({
+            text:   txt,
+            midY:   (Math.min(...ys) + Math.max(...ys)) / 2,
+            midX:   (Math.min(...xs) + Math.max(...xs)) / 2,
+            height: Math.max(...ys) - Math.min(...ys),
+          });
+        }
+      }
+    }
+  }
+  return words;
+}
+
+/**
+ * Group words into horizontal rows by Y proximity.
+ * Returns rows sorted top-to-bottom; each row is a single space-joined
+ * text string with words sorted left-to-right.
+ */
+function groupWordsIntoRows(words) {
+  if (!words.length) return [];
+
+  // Adaptive tolerance: ~60% of average word height, minimum 8 px
+  const avgH = words.reduce((s, w) => s + w.height, 0) / words.length;
+  const tol  = Math.max(avgH * 0.6, 8);
+
+  const sorted = [...words].sort((a, b) => a.midY - b.midY);
+  const rows   = [];
+  let   row    = [sorted[0]];
+  let   rowY   = sorted[0].midY;
+
+  for (let i = 1; i < sorted.length; i++) {
+    const w = sorted[i];
+    if (Math.abs(w.midY - rowY) <= tol) {
+      row.push(w);
+      rowY = row.reduce((s, x) => s + x.midY, 0) / row.length; // running avg Y
+    } else {
+      row.sort((a, b) => a.midX - b.midX);
+      rows.push(row.map(x => x.text).join(" "));
+      row  = [w];
+      rowY = w.midY;
+    }
+  }
+  row.sort((a, b) => a.midX - b.midX);
+  rows.push(row.map(x => x.text).join(" "));
+
+  return rows;
+}
+
+/**
+ * Spatial extraction entry point.
+ * Returns the medicine array (same shape as the text-based extractor)
+ * or null if spatial data is not available / yields no medicines.
+ */
+function extractMedicineRowsFromPrescriptionSpatial(fullTextAnnotation) {
+  const words = extractWordsWithPositions(fullTextAnnotation);
+  if (!words.length) return null;
+
+  const rowTexts = groupWordsIntoRows(words);
+  console.log(`📐 Spatial rows (${rowTexts.length}):`);
+  rowTexts.forEach((r, i) => console.log(`  [${i + 1}] "${r}"`));
+
+  const medicines = [];
+
+  for (const rowText of rowTexts) {
+    if (!looksLikeMedicineLine(rowText)) continue;
+
+    const medicineName = extractMedicineNameFromBlock(rowText);
+    if (!medicineName || medicineName.length < 3) continue;
+
+    // All fields come from the SAME row — no column-index mismatch possible
+    const dose          = extractDoseFromBlock(rowText);
+    const frequency     = extractFrequencyFromBlock(rowText, [rowText]);
+    const instruction   = extractInstructionFromBlock(rowText);
+    const durationLabel = extractDurationFromBlock(rowText, [rowText]);
+    const durationDays  = getDurationDays(durationLabel);
+    const prescriptionQty = extractPrescriptionQty(rowText);
+
+    console.log(`  ✅ ${medicineName}: ${dose}, ${frequency}, ${durationLabel}(${durationDays}d), qty=${prescriptionQty}`);
+
+    medicines.push({
+      medicineName,
+      name:          medicineName,
+      dose:          dose          || "",
+      frequency:     frequency     || "",
+      freqLabel:     frequency     || "",
+      instruction:   instruction   || "",
+      duration:      durationDays,
+      durationDays,
+      durationLabel: durationLabel || "",
+      prescriptionQty: prescriptionQty || null,
+    });
+  }
+
+  // Deduplicate
+  const unique = [];
+  for (const med of medicines) {
+    const key = normalizeMedicineName(med.medicineName);
+    if (!unique.some(u => normalizeMedicineName(u.medicineName) === key)) unique.push(med);
+  }
+
+  console.log(`📐 Spatial extraction: ${unique.length} unique medicines found`);
+  return unique.length > 0 ? unique : null;
+}
+
+/* ============================================================
+ * TEXT-BASED EXTRACTION (fallback for PDFs / no spatial data)
+ * ============================================================ */
+
 function extractMedicineRowsFromPrescription(text) {
   // Crop to Rx section — excludes "Next followup after 6 Month(s)" and
   // investigation results that would contaminate duration extraction.
