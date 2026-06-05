@@ -1240,23 +1240,23 @@ function groupWordsIntoRowObjects(words, yTolerance) {
   for (const word of sorted) {
     let matched = false;
     for (let r = rows.length - 1; r >= 0; r--) {
-      if (Math.abs(word.midY - rows[r].avgY) <= yTolerance) {
+      // Compare against anchorY (first word's Y), NOT a running average.
+      // Running averages drift and cascade-merge adjacent table rows.
+      if (Math.abs(word.midY - rows[r].anchorY) <= yTolerance) {
         rows[r].words.push(word);
-        rows[r].avgY =
-          rows[r].words.reduce((s, w) => s + w.midY, 0) / rows[r].words.length;
         matched = true;
         break;
       }
     }
     if (!matched) {
-      rows.push({ avgY: word.midY, words: [word] });
+      rows.push({ anchorY: word.midY, words: [word] });
     }
   }
 
   return rows.map((row) => {
     const sortedWords = row.words.sort((a, b) => a.x - b.x);
     return {
-      avgY: row.avgY,
+      anchorY: row.anchorY,
       words: sortedWords,
       text: sortedWords.map((w) => w.text).join(" "),
     };
@@ -1289,6 +1289,18 @@ function extractMedicineRowsFromPrescriptionSpatial(fullTextAnnotation) {
 
     const medicineName = extractMedicineNameFromBlock(rowText);
     if (!medicineName || medicineName.length < 3) continue;
+
+    // Reject rows where the name still looks like investigation/non-medicine content
+    // (date in name, lab decimal values, or suspiciously long combined name)
+    const isGarbled =
+      medicineName.length > 60 ||
+      /\d{1,2}\/\d{1,2}\/\d{2,4}/.test(medicineName) ||
+      /\d{2,}[.,]\d{2,}/.test(medicineName) ||
+      /(HEMOGLOBIN|LEUKOCYTES|CREATININE|HBA1C|INVESTIGATION)/i.test(medicineName);
+    if (isGarbled) {
+      console.log(`⚠️ Skipping garbled spatial row: "${medicineName.substring(0, 50)}..."`);
+      continue;
+    }
 
     // All fields come from the SAME spatial row — no cross-row contamination
     const dose = extractDoseFromBlock(rowText);
@@ -1403,6 +1415,9 @@ function extractMedicineNameFromBlock(line = "") {
     /\s+after\s+food\b/i,
     /\s+before\s+food\b/i,
     /\s+\d+\s*(month|months|day|days|week|weeks)\b/i,
+    // Investigation / lab-result markers that bleed into the last table row
+    /\s+\d{1,2}\/\d{1,2}\/\d{2,4}\b/,  // date  e.g. 01/04/2026
+    /[\s-]+\d{2,}[.,]\d{2,}/,            // decimal value e.g. 13.80, 9900.00
   ];
 
   for (const pattern of stopPatterns) {
