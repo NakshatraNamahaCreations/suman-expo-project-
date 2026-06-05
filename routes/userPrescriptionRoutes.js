@@ -1,8 +1,73 @@
 const express = require("express");
 const router = express.Router();
 const UserPrescriptionFile = require("../models/UserPrescriptionFile");
+const Patient = require("../models/Patient");
 const { prescriptionUpload } = require("../middleware/cloudinaryUpload");
 const { deleteFromCloudinary } = require("../config/cloudinary");
+
+/* ══════════════════════════════════════════════════════════════
+   GET /api/user-prescriptions/admin/all
+   Admin: fetch ALL prescription files with patient info,
+   pagination, and search. Must come before /:userId route.
+══════════════════════════════════════════════════════════════ */
+router.get("/admin/all", async (req, res) => {
+  try {
+    const page    = Math.max(1, parseInt(req.query.page)  || 1);
+    const limit   = Math.min(100, parseInt(req.query.limit) || 20);
+    const search  = (req.query.search || "").trim();
+    const skip    = (page - 1) * limit;
+
+    // Build search filter
+    let matchQuery = {};
+    if (search) {
+      matchQuery = {
+        $or: [
+          { patientName: { $regex: search, $options: "i" } },
+          { originalFileName: { $regex: search, $options: "i" } },
+          { userId: { $regex: search, $options: "i" } },
+        ],
+      };
+    }
+
+    const [files, total] = await Promise.all([
+      UserPrescriptionFile.find(matchQuery)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      UserPrescriptionFile.countDocuments(matchQuery),
+    ]);
+
+    // Enrich with patient info where patientId is set
+    const patientIds = [...new Set(files.map(f => f.patientId).filter(Boolean))];
+    let patientMap = {};
+    if (patientIds.length) {
+      const patients = await Patient.find({ patientId: { $in: patientIds } })
+        .select("patientId name phone primaryPhone email gender age")
+        .lean();
+      patients.forEach(p => { patientMap[p.patientId] = p; });
+    }
+
+    const enriched = files.map(f => ({
+      ...f,
+      patient: f.patientId ? (patientMap[f.patientId] || null) : null,
+    }));
+
+    return res.json({
+      success: true,
+      data: enriched,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    });
+  } catch (err) {
+    console.error("❌ Error fetching all prescriptions:", err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 /* ══════════════════════════════════════════════════════════════
    GET /api/user-prescriptions/:userId
