@@ -1069,56 +1069,33 @@ function cleanDurationLabel(value = "") {
 
 /**
  * Extract the explicit Qty number written in the prescription Qty column.
- * Handles formats: "6 Month(s) 180", "15 Day(s) 15", "2 Months 120"
+ * Prescriptions typically print: "6 Month(s) 180" where 180 is the Qty.
  */
 function extractPrescriptionQty(block = "") {
   const text = String(block);
 
-  // Pattern: qty number AFTER a duration string (handles "Month(s)", "Months", "Days", etc.)
+  // Pattern: number directly after duration — "6 Month(s) 180" or "15 Day(s) 15"
   const afterDuration = text.match(
-    /\d+\s*(?:month|day|week)(?:s|\(s\))?\s+(\d{1,4})(?!\s*[\d\/])/i
+    /(?:\d+\s*(?:month|months|month\(s\)|day|days|day\(s\)|week|weeks|week\(s\)))\s+(\d{1,4})\b/i
   );
   if (afterDuration) {
     const qty = parseInt(afterDuration[1], 10);
     if (qty > 0 && qty <= 9999) return qty;
   }
 
-  return null;
-}
-
-/**
- * Extract ALL "Duration Qty" pairs from the full OCR text.
- * Used as a table-level fallback when per-block extraction fails (OCR column layout).
- * Pairs are returned in document order — one per medicine row.
- *
- * Matches: "6 Month(s) 180", "2 Months 120", "15 Day(s) 15", "4 Weeks 28"
- * Excludes: "6 Month(s) on 28/9/2026" (qty followed by "/") and similar false positives.
- */
-function extractAllDurationQtyPairs(text) {
-  const pairs = [];
-  const pattern = /(\d+)\s*(?:month(?:s|\(s\))?|day(?:s|\(s\))?|week(?:s|\(s\))?)\s+(\d{1,4})(?!\s*[\d\/])/gi;
-  let match;
-  while ((match = pattern.exec(text)) !== null) {
-    const num = parseInt(match[1], 10);
-    const qty = parseInt(match[2], 10);
-    const full = match[0].toLowerCase();
-    let durationDays = 0;
-    if (full.includes("month")) durationDays = num * 30;
-    else if (full.includes("week")) durationDays = num * 7;
-    else if (full.includes("day")) durationDays = num;
-
-    if (qty >= 10 && qty <= 9999 && durationDays > 0) {
-      const durationLabel = full.includes("month") ? `${num} Month(s)` :
-        full.includes("week") ? `${num} Week(s)` :
-          `${num} Day(s)`;
-      pairs.push({ durationLabel, durationDays, prescriptionQty: qty });
-    }
+  // Fallback: last standalone 2-4 digit number in the block
+  const allNums = [...text.matchAll(/\b(\d{2,4})\b/g)];
+  if (allNums.length > 0) {
+    const last = parseInt(allNums[allNums.length - 1][1], 10);
+    if (last >= 10 && last <= 9999) return last;
   }
-  return pairs;
+
+  return null;
 }
 
 function getDurationDays(durationText = "") {
   if (!durationText) return 0;
+
   if (typeof durationText === "number") return durationText;
 
   const text = String(durationText).toLowerCase();
@@ -1127,7 +1104,6 @@ function getDurationDays(durationText = "") {
 
   if (!number) return 0;
 
-  // Handle months (1 month = 30 days)
   if (text.includes("month")) return number * 30;
   if (text.includes("week")) return number * 7;
   if (text.includes("day")) return number;
@@ -1218,57 +1194,27 @@ function extractMedicineRowsFromPrescription(text) {
     .map((line) => line.trim())
     .filter(Boolean);
 
-  // Step 1: locate all medicine-name line indices
-  const medLineIndices = [];
-  for (let i = 0; i < rawLines.length; i++) {
-    if (looksLikeMedicineLine(rawLines[i])) medLineIndices.push(i);
-  }
-
-  // Step 2: extract all "Duration Qty" pairs from the full text (table-level)
-  // This handles tabular prescriptions where OCR may cluster columns.
-  const globalPairs = extractAllDurationQtyPairs(text);
-  console.log(`🔢 Global duration-qty pairs (${globalPairs.length}):`, JSON.stringify(globalPairs));
-
   const medicines = [];
 
-  for (let mi = 0; mi < medLineIndices.length; mi++) {
-    const i = medLineIndices[mi];
+  for (let i = 0; i < rawLines.length; i++) {
     const currentLine = rawLines[i];
 
-    // Block: from this medicine line to the next medicine line (max 15 lines).
-    // Stops at the next TABLET/TAB/etc. line so data doesn't bleed between medicines.
-    const nextMedLine = mi + 1 < medLineIndices.length
-      ? medLineIndices[mi + 1]
-      : rawLines.length;
-    const blockEnd = Math.min(nextMedLine, i + 15);
-    const nextLines = rawLines.slice(i, blockEnd);
+    if (!looksLikeMedicineLine(currentLine)) continue;
+
+    const nextLines = rawLines.slice(i, i + 8);
     const block = nextLines.join(" ");
 
     const medicineName = extractMedicineNameFromBlock(currentLine);
-    if (!medicineName || medicineName.length < 3) continue;
-
     const dose = extractDoseFromBlock(block);
     const frequency = extractFrequencyFromBlock(block, nextLines);
     const instruction = extractInstructionFromBlock(block);
+    const durationLabel = extractDurationFromBlock(block, nextLines);
+    const durationDays = getDurationDays(durationLabel);
+    const prescriptionQty = extractPrescriptionQty(block);
 
-    // Per-block duration/qty (reliable when OCR keeps each row together)
-    const blockDurationLabel = extractDurationFromBlock(block, nextLines);
-    const blockDurationDays = getDurationDays(blockDurationLabel);
-    const blockQty = extractPrescriptionQty(block);
+    if (!medicineName || medicineName.length < 3) continue;
 
-    // Global pair for this medicine position (reliable when OCR clusters columns)
-    const gp = mi < globalPairs.length ? globalPairs[mi] : null;
-
-    // Merge: prefer global pair (table-level) when available; fall back to per-block
-    const durationDays = gp?.durationDays || blockDurationDays || 0;
-    const durationLabel = gp?.durationLabel || blockDurationLabel || "";
-    const prescriptionQty = gp?.prescriptionQty || blockQty || null;
-
-    if (gp) {
-      console.log(`  ✅ [${mi + 1}] ${medicineName}: global dur=${gp.durationLabel} qty=${gp.prescriptionQty} | block dur=${blockDurationLabel}(${blockDurationDays}d) qty=${blockQty}`);
-    }
-
-    medicines.push({
+    const row = {
       medicineName,
       name: medicineName,
 
@@ -1277,21 +1223,30 @@ function extractMedicineRowsFromPrescription(text) {
       freqLabel: frequency || "",
       instruction: instruction || "",
 
+      // duration is days number
       duration: durationDays,
       durationDays,
+
+      // original text from prescription
       durationLabel: durationLabel || "",
 
+      // Qty as explicitly written in the prescription Qty column
       prescriptionQty: prescriptionQty || null,
-    });
+    };
+
+    medicines.push(row);
   }
 
-  // Deduplicate by normalised name
   const unique = [];
+
   for (const med of medicines) {
     const key = normalizeMedicineName(med.medicineName);
-    if (!unique.some((u) => normalizeMedicineName(u.medicineName) === key)) {
-      unique.push(med);
-    }
+
+    const exists = unique.some(
+      (item) => normalizeMedicineName(item.medicineName) === key
+    );
+
+    if (!exists) unique.push(med);
   }
 
   return unique;
