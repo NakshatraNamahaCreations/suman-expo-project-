@@ -498,9 +498,20 @@ function looksLikeMedicineLine(line = "") {
 
   if (isHeaderOrInvalidLine(text)) return false;
 
-  return /\b(TABLET|TAB|CAPSULE|CAP|CREAM|SYRUP|INJECTION|INJ|OINTMENT|DROP|DROPS)\b/i.test(
-    text
-  );
+  // Must contain a medicine-type keyword
+  if (!/\b(TABLET|TAB|CAPSULE|CAP|CREAM|SYRUP|INJECTION|INJ|OINTMENT|DROP|DROPS)\b/i.test(text)) {
+    return false;
+  }
+
+  // Reject dosage lines: a line starting with "N Tablet/Tab" is a dose/data row,
+  // not a medicine name.  e.g. "2 Tablet 0-0-1 After Food 2 Month(s) 120"
+  // Without this guard, dose lines are treated as medicine boundaries and shrink
+  // each medicine's block to a single name-only line.
+  if (/^\d+\s+(tablet|tab|capsule|cap)\b/i.test(text)) {
+    return false;
+  }
+
+  return true;
 }
 
 /**
@@ -625,56 +636,86 @@ function extractAllInstructionsFromSection(rxText) {
 }
 
 /**
- * Column-extraction parser for tabular prescriptions.
+ * Per-medicine block extraction.
  *
- * Instead of a per-medicine fixed window (which cross-contaminates rows when
- * the OCR column layout differs from expectations), this function extracts
- * each column independently across the whole Rx section and then zips them
- * by index. This guarantees that medicine #6 gets the 6th dose, 6th frequency,
- * and 6th duration — regardless of how the OCR laid out the lines.
+ * Strategy:
+ * 1. Crop to the Rx table section only (removes investigation/followup contamination).
+ * 2. Find every medicine-name line using the improved looksLikeMedicineLine()
+ *    which now rejects dose lines ("2 Tablet 0-0-1…") as boundaries.
+ * 3. Each medicine's block = lines from its name line up to the NEXT medicine
+ *    name line (or end of Rx section, whichever comes first).
+ * 4. Extract dose, freq, instruction, duration, qty from that block only.
+ *
+ * This guarantees each medicine gets its own row data with no cross-row bleed.
  */
 function extractMedicineRowsFromPrescription(text) {
-  // Isolate the Rx table only — investigation results and followup notes
-  // often contain "X Month(s)" text that would corrupt duration extraction.
-  const rxText = extractRxSection(text);
-  console.log(`📋 Rx section: ${rxText.length} chars (full text: ${text.length} chars)`);
+  // Crop to Rx section — prevents "Next followup after 6 Month(s)" etc.
+  // from contaminating the last medicine's block.
+  const rxText   = extractRxSection(text);
+  const rawLines = rxText.split(/\n/).map(l => l.trim()).filter(Boolean);
 
-  const names     = extractAllMedicineNamesFromSection(rxText);
-  const doses     = extractAllDosesFromSection(rxText);
-  const freqs     = extractAllFrequenciesFromSection(rxText);
-  const insts     = extractAllInstructionsFromSection(rxText);
-  const durPairs  = extractAllDurationQtyPairs(rxText);
+  // Collect line indices for MEDICINE NAME lines only.
+  // Dose lines ("2 Tablet 0-0-1 …") are now excluded by looksLikeMedicineLine.
+  const medLineIndices = [];
+  for (let i = 0; i < rawLines.length; i++) {
+    if (looksLikeMedicineLine(rawLines[i])) medLineIndices.push(i);
+  }
 
-  console.log(`💊 Columns — medicines:${names.length} doses:${doses.length} freqs:${freqs.length} durs:${durPairs.length}`);
-  console.log("  Names:", names);
-  console.log("  Doses:", doses);
-  console.log("  Freqs:", freqs);
-  console.log("  Dur-Qty:", JSON.stringify(durPairs));
+  console.log(`📋 Rx section: ${rxText.length} chars | ${rawLines.length} lines | ${medLineIndices.length} medicine lines`);
 
-  return names.map((medicineName, i) => {
-    const dose          = doses[i]    || "1 Tablet";
-    const frequency     = freqs[i]    || "";
-    const instruction   = insts[i]    || "";
-    const dp            = i < durPairs.length ? durPairs[i] : {};
-    const durationDays  = dp.durationDays   || 0;
-    const durationLabel = dp.durationLabel  || "";
-    const prescriptionQty = dp.prescriptionQty || null;
+  const medicines = [];
 
-    console.log(`  [${i + 1}] ${medicineName}: ${dose}, ${frequency}, ${durationLabel}(${durationDays}d), qty=${prescriptionQty}`);
+  for (let mi = 0; mi < medLineIndices.length; mi++) {
+    const i           = medLineIndices[mi];
+    const currentLine = rawLines[i];
 
-    return {
+    // Block: from this medicine's name line to the next medicine's name line.
+    // Because dose lines are no longer treated as medicine boundaries, each
+    // block contains the full row data for exactly one medicine.
+    const nextMedLine = mi + 1 < medLineIndices.length
+      ? medLineIndices[mi + 1]
+      : rawLines.length;
+    const blockEnd  = Math.min(nextMedLine, i + 20);
+    const nextLines = rawLines.slice(i, blockEnd);
+    const block     = nextLines.join(" ");
+
+    const medicineName  = extractMedicineNameFromBlock(currentLine);
+    if (!medicineName || medicineName.length < 3) continue;
+
+    const dose          = extractDoseFromBlock(block);
+    const frequency     = extractFrequencyFromBlock(block, nextLines);
+    const instruction   = extractInstructionFromBlock(block);
+    const durationLabel = extractDurationFromBlock(block, nextLines);
+    const durationDays  = getDurationDays(durationLabel);
+    const prescriptionQty = extractPrescriptionQty(block);
+
+    console.log(`  [${mi + 1}] ${medicineName}: ${dose || "-"}, ${frequency || "-"}, ${durationLabel || "-"}(${durationDays}d), qty=${prescriptionQty}`);
+
+    medicines.push({
       medicineName,
       name: medicineName,
-      dose,
-      frequency,
-      freqLabel: frequency,
-      instruction,
-      duration:   durationDays,
+      dose:          dose       || "",
+      frequency:     frequency  || "",
+      freqLabel:     frequency  || "",
+      instruction:   instruction || "",
+      duration:      durationDays,
       durationDays,
-      durationLabel,
-      prescriptionQty,
-    };
-  });
+      durationLabel: durationLabel || "",
+      prescriptionQty: prescriptionQty || null,
+    });
+  }
+
+  // Deduplicate by normalised name
+  const unique = [];
+  for (const med of medicines) {
+    const key = normalizeMedicineName(med.medicineName);
+    if (!unique.some(u => normalizeMedicineName(u.medicineName) === key)) {
+      unique.push(med);
+    }
+  }
+
+  console.log(`✅ Extracted ${unique.length} unique medicines`);
+  return unique;
 }
 
 function extractMedicineNameFromBlock(line = "") {
