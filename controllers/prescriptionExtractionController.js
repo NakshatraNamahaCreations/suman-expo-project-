@@ -666,9 +666,15 @@ function extractMedicineRowsFromPrescription(text) {
     if (looksLikeMedicineLine(rawLines[i])) medLineIndices.push(i);
   }
 
-  // Global duration-qty pairs from the full Rx section — one per medicine row
-  const globalPairs = extractAllDurationQtyPairs(rxText);
-  console.log(`📋 Rx: ${rxText.length}chars | ${medLineIndices.length} medicine lines | ${globalPairs.length} duration-qty pairs`);
+  // Global duration-qty pairs — scanned from the FULL OCR text (not just rxText).
+  // Reason: OCR sometimes places the Duration+Qty column AFTER footer text
+  // ("All Medications are…") which causes extractRxSection to cut the Rx section
+  // short, losing duration data for the last 2–3 medicines.
+  // The "Next followup after 6 Month(s) on 28/9/2026" false-positive is safe
+  // because "on" intervenes between the duration and the date digits, so the
+  // pattern \s+(\d{1,4})(?![\d/]) does NOT match it.
+  const globalPairs = extractAllDurationQtyPairs(text);
+  console.log(`📋 Rx: ${rxText.length}chars | ${medLineIndices.length} medicine lines | ${globalPairs.length} duration-qty pairs (from full text)`);
   console.log("  Global pairs:", JSON.stringify(globalPairs));
 
   const medicines = [];
