@@ -1561,6 +1561,7 @@ async function matchMedicinesWithDatabase(extractedMedicines) {
             bestMatch.newMrp ||
             bestMatch.price ||
             0,
+          taxableValue: bestMatch.taxableValue || 0,
 
           qty: bestMatch.qty || 0,
           stock: bestMatch.qty || 0,
