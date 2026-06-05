@@ -796,6 +796,7 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
     }
 
     let extractedText = "";
+    let visionFullTextAnnotation = null;
 
     try {
       const request = {
@@ -813,6 +814,9 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
       };
 
       const [result] = await client.annotateImage(request);
+
+      // Store full annotation (includes per-word bounding boxes for spatial extraction)
+      visionFullTextAnnotation = result.fullTextAnnotation || null;
 
       if (result.fullTextAnnotation && result.fullTextAnnotation.text) {
         extractedText = result.fullTextAnnotation.text;
@@ -885,7 +889,13 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
     console.log(extractedText);
     console.log("🧾 RAW OCR TEXT END\n");
 
-    const extractedMedicines = extractMedicineRowsFromPrescription(extractedText);
+    // Spatial extraction uses actual bounding-box positions → each medicine gets
+    // only its own row's frequency/duration/qty.  Fall back to text-only if it
+    // finds fewer than 3 medicines (e.g., older image without usable bounding boxes).
+    let extractedMedicines =
+      (visionFullTextAnnotation &&
+        extractMedicineRowsFromPrescriptionSpatial(visionFullTextAnnotation)) ||
+      extractMedicineRowsFromPrescription(extractedText);
 
     console.log("🧾 FINAL OCR MEDICINES:", JSON.stringify(extractedMedicines, null, 2));
 
@@ -1188,6 +1198,134 @@ function looksLikeMedicineLine(line = "") {
   );
 }
 
+// ─── Spatial (bounding-box) extraction ────────────────────────────────────────
+
+function extractWordsWithPositions(fullTextAnnotation) {
+  const words = [];
+  if (!fullTextAnnotation || !fullTextAnnotation.pages) return words;
+  for (const page of fullTextAnnotation.pages) {
+    for (const block of (page.blocks || [])) {
+      for (const paragraph of (block.paragraphs || [])) {
+        for (const word of (paragraph.words || [])) {
+          if (!word.boundingBox || !word.boundingBox.vertices) continue;
+          const verts = word.boundingBox.vertices;
+          const xs = verts.map((v) => v.x || 0);
+          const ys = verts.map((v) => v.y || 0);
+          const xMin = Math.min(...xs);
+          const yMin = Math.min(...ys);
+          const xMax = Math.max(...xs);
+          const yMax = Math.max(...ys);
+          const text = (word.symbols || []).map((s) => s.text || "").join("");
+          if (text.trim()) {
+            words.push({
+              text,
+              x: xMin,
+              y: yMin,
+              width: xMax - xMin,
+              height: yMax - yMin,
+              midY: (yMin + yMax) / 2,
+            });
+          }
+        }
+      }
+    }
+  }
+  return words;
+}
+
+function groupWordsIntoRowObjects(words, yTolerance) {
+  const sorted = [...words].sort((a, b) => a.midY - b.midY);
+  const rows = [];
+
+  for (const word of sorted) {
+    let matched = false;
+    for (let r = rows.length - 1; r >= 0; r--) {
+      if (Math.abs(word.midY - rows[r].avgY) <= yTolerance) {
+        rows[r].words.push(word);
+        rows[r].avgY =
+          rows[r].words.reduce((s, w) => s + w.midY, 0) / rows[r].words.length;
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      rows.push({ avgY: word.midY, words: [word] });
+    }
+  }
+
+  return rows.map((row) => {
+    const sortedWords = row.words.sort((a, b) => a.x - b.x);
+    return {
+      avgY: row.avgY,
+      words: sortedWords,
+      text: sortedWords.map((w) => w.text).join(" "),
+    };
+  });
+}
+
+/**
+ * Primary extraction: uses Google Vision bounding-box data to group words into
+ * their actual table rows, then extracts frequency/duration/qty from each row.
+ * Returns null if fewer than 3 medicines found (triggers text-based fallback).
+ */
+function extractMedicineRowsFromPrescriptionSpatial(fullTextAnnotation) {
+  const words = extractWordsWithPositions(fullTextAnnotation);
+  if (!words.length) return null;
+
+  // Adaptive row-height tolerance based on median word height
+  const heights = words
+    .map((w) => w.height)
+    .filter((h) => h > 0)
+    .sort((a, b) => a - b);
+  const medianH = heights[Math.floor(heights.length / 2)] || 20;
+  const tightT = Math.max(medianH * 0.8, 10);
+
+  const rows = groupWordsIntoRowObjects(words, tightT);
+  const medicines = [];
+
+  for (const row of rows) {
+    const rowText = row.text;
+    if (!looksLikeMedicineLine(rowText)) continue;
+
+    const medicineName = extractMedicineNameFromBlock(rowText);
+    if (!medicineName || medicineName.length < 3) continue;
+
+    // All fields come from the SAME spatial row — no cross-row contamination
+    const dose = extractDoseFromBlock(rowText);
+    const frequency = extractFrequencyFromBlock(rowText, [rowText]);
+    const instruction = extractInstructionFromBlock(rowText);
+    const durationLabel = extractDurationFromBlock(rowText, [rowText]);
+    const durationDays = getDurationDays(durationLabel);
+    const prescriptionQty = extractPrescriptionQty(rowText);
+
+    medicines.push({
+      medicineName,
+      name: medicineName,
+      dose: dose || "",
+      frequency: frequency || "",
+      freqLabel: frequency || "",
+      instruction: instruction || "",
+      duration: durationDays,
+      durationDays,
+      durationLabel: durationLabel || "",
+      prescriptionQty: prescriptionQty || null,
+    });
+  }
+
+  const unique = [];
+  for (const med of medicines) {
+    const key = normalizeMedicineName(med.medicineName);
+    if (!unique.some((item) => normalizeMedicineName(item.medicineName) === key)) {
+      unique.push(med);
+    }
+  }
+
+  console.log(`🔲 Spatial extraction found ${unique.length} medicine rows`);
+  return unique.length >= 3 ? unique : null;
+}
+
+// ─── Text-based extraction (fallback) ─────────────────────────────────────────
+
 function extractMedicineRowsFromPrescription(text) {
   const rawLines = text
     .split(/\n+/)
@@ -1201,7 +1339,9 @@ function extractMedicineRowsFromPrescription(text) {
 
     if (!looksLikeMedicineLine(currentLine)) continue;
 
-    const nextLines = rawLines.slice(i, i + 8);
+    // Limit to current line + 1 next line only — wider windows contaminate
+    // this medicine's data with the next medicine's frequency/duration/qty
+    const nextLines = rawLines.slice(i, i + 2);
     const block = nextLines.join(" ");
 
     const medicineName = extractMedicineNameFromBlock(currentLine);
