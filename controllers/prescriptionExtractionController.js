@@ -1096,7 +1096,7 @@ function extractPrescriptionQty(block = "") {
  */
 function extractAllDurationQtyPairs(text) {
   const pairs = [];
-  const pattern = /(\d+)\s*(?:month(?:s|\(s\))?|day(?:s|\(s\))?|week(?:s|\(s\))?)\s+(\d{1,4})(?![\d\/])/gi;
+  const pattern = /(\d+)\s*(?:month(?:s|\(s\))?|day(?:s|\(s\))?|week(?:s|\(s\))?)\s+(\d{1,4})(?!\s*[\d\/])/gi;
   let match;
   while ((match = pattern.exec(text)) !== null) {
     const num = parseInt(match[1], 10);
@@ -1218,41 +1218,69 @@ function extractMedicineRowsFromPrescription(text) {
     .map((line) => line.trim())
     .filter(Boolean);
 
+  // Step 1: locate all medicine-name line indices
+  const medLineIndices = [];
+  for (let i = 0; i < rawLines.length; i++) {
+    if (looksLikeMedicineLine(rawLines[i])) medLineIndices.push(i);
+  }
+
+  // Step 2: extract all "Duration Qty" pairs from the full text (table-level)
+  // This handles tabular prescriptions where OCR may cluster columns.
+  const globalPairs = extractAllDurationQtyPairs(text);
+  console.log(`🔢 Global duration-qty pairs (${globalPairs.length}):`, JSON.stringify(globalPairs));
+
   const medicines = [];
 
-  // Fixed-window iteration (original approach).
-  // NOTE: do NOT use medicine-boundary blocks here — OCR data lines like
-  // "1 Tablet 0-0-1 After Food" also contain "Tablet" and trigger
-  // looksLikeMedicineLine, which would shrink each block to 1 line (name only),
-  // breaking frequency/dose extraction.  A fixed 12-line window is safer.
-  for (let i = 0; i < rawLines.length; i++) {
+  for (let mi = 0; mi < medLineIndices.length; mi++) {
+    const i = medLineIndices[mi];
     const currentLine = rawLines[i];
 
-    if (!looksLikeMedicineLine(currentLine)) continue;
-
-    const nextLines = rawLines.slice(i, i + 12); // 12 lines (was 8)
+    // Block: from this medicine line to the next medicine line (max 15 lines).
+    // Stops at the next TABLET/TAB/etc. line so data doesn't bleed between medicines.
+    const nextMedLine = mi + 1 < medLineIndices.length
+      ? medLineIndices[mi + 1]
+      : rawLines.length;
+    const blockEnd = Math.min(nextMedLine, i + 15);
+    const nextLines = rawLines.slice(i, blockEnd);
     const block = nextLines.join(" ");
 
     const medicineName = extractMedicineNameFromBlock(currentLine);
     if (!medicineName || medicineName.length < 3) continue;
 
-    const dose          = extractDoseFromBlock(block);
-    const frequency     = extractFrequencyFromBlock(block, nextLines);
-    const instruction   = extractInstructionFromBlock(block);
-    const durationLabel = extractDurationFromBlock(block, nextLines);
-    const durationDays  = getDurationDays(durationLabel);
-    const prescriptionQty = extractPrescriptionQty(block);
+    const dose = extractDoseFromBlock(block);
+    const frequency = extractFrequencyFromBlock(block, nextLines);
+    const instruction = extractInstructionFromBlock(block);
+
+    // Per-block duration/qty (reliable when OCR keeps each row together)
+    const blockDurationLabel = extractDurationFromBlock(block, nextLines);
+    const blockDurationDays = getDurationDays(blockDurationLabel);
+    const blockQty = extractPrescriptionQty(block);
+
+    // Global pair for this medicine position (reliable when OCR clusters columns)
+    const gp = mi < globalPairs.length ? globalPairs[mi] : null;
+
+    // Merge: prefer global pair (table-level) when available; fall back to per-block
+    const durationDays = gp?.durationDays || blockDurationDays || 0;
+    const durationLabel = gp?.durationLabel || blockDurationLabel || "";
+    const prescriptionQty = gp?.prescriptionQty || blockQty || null;
+
+    if (gp) {
+      console.log(`  ✅ [${mi + 1}] ${medicineName}: global dur=${gp.durationLabel} qty=${gp.prescriptionQty} | block dur=${blockDurationLabel}(${blockDurationDays}d) qty=${blockQty}`);
+    }
 
     medicines.push({
       medicineName,
       name: medicineName,
+
       dose: dose || "",
       frequency: frequency || "",
       freqLabel: frequency || "",
       instruction: instruction || "",
+
       duration: durationDays,
       durationDays,
       durationLabel: durationLabel || "",
+
       prescriptionQty: prescriptionQty || null,
     });
   }
@@ -1264,44 +1292,6 @@ function extractMedicineRowsFromPrescription(text) {
     if (!unique.some((u) => normalizeMedicineName(u.medicineName) === key)) {
       unique.push(med);
     }
-  }
-
-  // ── Post-processing: fill/fix Duration & Qty from global text scan ─────────
-  // extractAllDurationQtyPairs scans the full OCR text for "N Month(s) QTY"
-  // patterns in document order. When the count exactly matches the medicine
-  // count, we can assign them by index — this recovers correct data when the
-  // per-block window missed the Duration/Qty columns (e.g. OCR splits rows).
-  const globalPairs = extractAllDurationQtyPairs(text);
-  console.log(
-    `🔢 Global duration-qty pairs (${globalPairs.length}) vs medicines (${unique.length}):`,
-    JSON.stringify(globalPairs)
-  );
-
-  if (globalPairs.length === unique.length) {
-    // Exact match → global pairs are authoritative for Duration and Qty
-    unique.forEach((med, k) => {
-      const gp = globalPairs[k];
-      med.duration     = gp.durationDays;
-      med.durationDays = gp.durationDays;
-      med.durationLabel = gp.durationLabel;
-      // Keep per-block qty if already found; use global as fallback
-      if (!med.prescriptionQty) med.prescriptionQty = gp.prescriptionQty;
-      console.log(
-        `  ✅ [${k + 1}] ${med.medicineName}: dur=${gp.durationLabel}(${gp.durationDays}d) qty=${med.prescriptionQty}`
-      );
-    });
-  } else {
-    // Partial/mismatched → only fill gaps; don't override existing correct values
-    unique.forEach((med, k) => {
-      const gp = k < globalPairs.length ? globalPairs[k] : null;
-      if (!gp) return;
-      if (!med.durationDays) {
-        med.duration     = gp.durationDays;
-        med.durationDays = gp.durationDays;
-        med.durationLabel = gp.durationLabel;
-      }
-      if (!med.prescriptionQty) med.prescriptionQty = gp.prescriptionQty;
-    });
   }
 
   return unique;
