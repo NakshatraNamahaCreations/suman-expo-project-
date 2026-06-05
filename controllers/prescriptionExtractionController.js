@@ -1200,6 +1200,137 @@ function looksLikeMedicineLine(line = "") {
   );
 }
 
+/* ============================================================
+ * SPATIAL (BOUNDING-BOX) EXTRACTION
+ * Groups Vision API words by Y-coordinate into horizontal rows
+ * so each medicine's name/dose/freq/duration/qty are parsed
+ * together from the same visual row — no cross-row contamination.
+ * ============================================================ */
+
+/** Flatten all Vision word objects to {text, midX, midY, height}. */
+function extractWordsWithPositions(fullTextAnnotation) {
+  const words = [];
+  if (!fullTextAnnotation?.pages) return words;
+  for (const page of fullTextAnnotation.pages) {
+    for (const block of page.blocks || []) {
+      for (const para of block.paragraphs || []) {
+        for (const word of para.words || []) {
+          const txt = (word.symbols || []).map(s => s.text).join("").trim();
+          if (!txt) continue;
+          const verts = word.boundingBox?.vertices || word.boundingBox?.normalizedVertices || [];
+          if (verts.length < 4) continue;
+          const ys = verts.map(v => v.y || 0);
+          const xs = verts.map(v => v.x || 0);
+          words.push({
+            text:   txt,
+            midY:   (Math.min(...ys) + Math.max(...ys)) / 2,
+            midX:   (Math.min(...xs) + Math.max(...xs)) / 2,
+            height: Math.max(...ys) - Math.min(...ys),
+          });
+        }
+      }
+    }
+  }
+  return words;
+}
+
+/** Group words into horizontal rows using a fixed Y-tolerance anchor. */
+function groupWordsIntoRowObjects(sortedWords, tol) {
+  const rows = [];
+  if (!sortedWords.length) return rows;
+  let row  = [sortedWords[0]];
+  let refY = sortedWords[0].midY;
+  for (let i = 1; i < sortedWords.length; i++) {
+    const w = sortedWords[i];
+    if (Math.abs(w.midY - refY) <= tol) {
+      row.push(w);
+    } else {
+      row.sort((a, b) => a.midX - b.midX);
+      rows.push({ text: row.map(x => x.text).join(" "), avgY: row.reduce((s, x) => s + x.midY, 0) / row.length, words: row });
+      row  = [w];
+      refY = w.midY;
+    }
+  }
+  row.sort((a, b) => a.midX - b.midX);
+  rows.push({ text: row.map(x => x.text).join(" "), avgY: row.reduce((s, x) => s + x.midY, 0) / row.length, words: row });
+  return rows;
+}
+
+/**
+ * Spatial extraction — two-pass distortion-tolerant approach.
+ * Pass 1 (tight): find medicine-name anchor rows.
+ * Pass 2 (wide, nearest-anchor): assign every word to its closest medicine row.
+ * Returns null if spatial data unavailable → falls back to text-based.
+ */
+function extractMedicineRowsFromPrescriptionSpatial(fullTextAnnotation) {
+  const words = extractWordsWithPositions(fullTextAnnotation);
+  if (!words.length) return null;
+
+  const avgH   = words.reduce((s, w) => s + w.height, 0) / words.length;
+  const tightT = Math.max(avgH * 0.5, 6);
+  const wideT  = Math.max(avgH * 1.8, 20);
+
+  const sortedByY  = [...words].sort((a, b) => a.midY - b.midY);
+  const tightRows  = groupWordsIntoRowObjects(sortedByY, tightT);
+  const medAnchors = tightRows.filter(r => looksLikeMedicineLine(r.text));
+
+  console.log(`📐 Spatial: ${words.length} words | tightT=${tightT.toFixed(1)} wideT=${wideT.toFixed(1)} | ${medAnchors.length} medicine anchors`);
+  if (!medAnchors.length) return null;
+
+  // Nearest-anchor: each word → closest medicine anchor (within wideT)
+  const bins = medAnchors.map(() => []);
+  for (const word of words) {
+    let closestK = 0, minDist = Infinity;
+    for (let k = 0; k < medAnchors.length; k++) {
+      const d = Math.abs(word.midY - medAnchors[k].avgY);
+      if (d < minDist) { minDist = d; closestK = k; }
+    }
+    if (minDist <= wideT) bins[closestK].push(word);
+  }
+
+  const medicines = [];
+  for (let k = 0; k < medAnchors.length; k++) {
+    const rowWords = bins[k].sort((a, b) => a.midX - b.midX);
+    const rowText  = rowWords.map(w => w.text).join(" ");
+
+    const medicineName = extractMedicineNameFromBlock(rowText);
+    if (!medicineName || medicineName.length < 3) continue;
+
+    const dose            = extractDoseFromBlock(rowText);
+    const frequency       = extractFrequencyFromBlock(rowText, [rowText]);
+    const instruction     = extractInstructionFromBlock(rowText);
+    const durationLabel   = extractDurationFromBlock(rowText, [rowText]);
+    const durationDays    = getDurationDays(durationLabel);
+    const prescriptionQty = extractPrescriptionQty(rowText);
+
+    console.log(`  ✅ [k=${k} Y=${medAnchors[k].avgY.toFixed(0)}] ${medicineName}: ${dose||"-"}, freq=${frequency||"-"}, ${durationLabel||"-"}(${durationDays}d), qty=${prescriptionQty}`);
+
+    medicines.push({
+      medicineName, name: medicineName,
+      dose:          dose          || "",
+      frequency:     frequency     || "",
+      freqLabel:     frequency     || "",
+      instruction:   instruction   || "",
+      duration:      durationDays,
+      durationDays,
+      durationLabel: durationLabel || "",
+      prescriptionQty: prescriptionQty || null,
+    });
+  }
+
+  const unique = [];
+  for (const med of medicines) {
+    const key = normalizeMedicineName(med.medicineName);
+    if (!unique.some(u => normalizeMedicineName(u.medicineName) === key)) unique.push(med);
+  }
+
+  console.log(`📐 Spatial extraction: ${unique.length} unique medicines`);
+  return unique.length > 0 ? unique : null;
+}
+
+/* ============================================================
+ * TEXT-BASED EXTRACTION (fallback for PDFs / no spatial data)
+ * ============================================================ */
 function extractMedicineRowsFromPrescription(text) {
   const rawLines = text
     .split(/\n+/)
