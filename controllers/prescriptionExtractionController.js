@@ -389,22 +389,21 @@ function cleanDurationLabel(value = "") {
 function extractPrescriptionQty(block = "") {
   const text = String(block);
 
-  // Pattern: number directly after duration — "6 Month(s) 180" or "15 Day(s) 15"
+  // Match: qty number IMMEDIATELY after a duration string.
+  // e.g. "6 Month(s) 180", "15 Day(s) 15", "3 Months 90"
+  // Requirements:
+  //   - qty must be >= 10 (avoids matching dose "1 Tablet" that follows "Day(s)")
+  //   - qty must not be followed by "/" (avoids partial date captures)
   const afterDuration = text.match(
-    /(?:\d+\s*(?:month|months|month\(s\)|day|days|day\(s\)|week|weeks|week\(s\)))\s+(\d{1,4})\b/i
+    /(?:\d+\s*(?:month|months|month\(s\)|day|days|day\(s\)|week|weeks|week\(s\)))\s+(\d{1,4})(?![\d\/])/i
   );
   if (afterDuration) {
     const qty = parseInt(afterDuration[1], 10);
-    if (qty > 0 && qty <= 9999) return qty;
+    if (qty >= 10 && qty <= 9999) return qty;
   }
 
-  // Fallback: last standalone 2-4 digit number in the block
-  const allNums = [...text.matchAll(/\b(\d{2,4})\b/g)];
-  if (allNums.length > 0) {
-    const last = parseInt(allNums[allNums.length - 1][1], 10);
-    if (last >= 10 && last <= 9999) return last;
-  }
-
+  // No aggressive "last number" fallback — it falsely matches numbers in
+  // medicine names (e.g. "200/150 MG" → 150) and adjacent dose lines.
   return null;
 }
 
@@ -670,12 +669,16 @@ function extractMedicineRowsFromPrescription(text) {
   // Reason: OCR sometimes places the Duration+Qty column AFTER footer text
   // ("All Medications are…") which causes extractRxSection to cut the Rx section
   // short, losing duration data for the last 2–3 medicines.
-  // The "Next followup after 6 Month(s) on 28/9/2026" false-positive is safe
-  // because "on" intervenes between the duration and the date digits, so the
-  // pattern \s+(\d{1,4})(?![\d/]) does NOT match it.
   const globalPairs = extractAllDurationQtyPairs(text);
-  console.log(`📋 Rx: ${rxText.length}chars | ${medLineIndices.length} medicine lines | ${globalPairs.length} duration-qty pairs (from full text)`);
+
+  // Global frequency list — fallback for medicines whose per-block window
+  // does not contain their frequency (e.g. when OCR reads the Frequency column
+  // as a separate block placed before the first medicine-name line).
+  const globalFreqs = extractAllFrequenciesFromSection(rxText);
+
+  console.log(`📋 Rx: ${rxText.length}chars | ${medLineIndices.length} medicine lines | ${globalPairs.length} dur-qty pairs | ${globalFreqs.length} global freqs`);
   console.log("  Global pairs:", JSON.stringify(globalPairs));
+  console.log("  Global freqs:", globalFreqs);
 
   const medicines = [];
 
@@ -694,8 +697,15 @@ function extractMedicineRowsFromPrescription(text) {
     const medicineName = extractMedicineNameFromBlock(currentLine);
     if (!medicineName || medicineName.length < 3) continue;
 
-    const dose        = extractDoseFromBlock(block);
-    const frequency   = extractFrequencyFromBlock(block, nextLines);
+    const dose = extractDoseFromBlock(block);
+
+    // Frequency: try per-block first; fall back to global list by index.
+    // Global fallback handles the case where OCR outputs the Frequency column
+    // as a separate text block placed before the first medicine-name line,
+    // leaving medicine #1's per-block window empty of any X-X-X pattern.
+    const blockFrequency = extractFrequencyFromBlock(block, nextLines);
+    const frequency      = blockFrequency || (mi < globalFreqs.length ? globalFreqs[mi] : "");
+
     const instruction = extractInstructionFromBlock(block);
 
     // Global pair for duration + qty (indexed by medicine position)
