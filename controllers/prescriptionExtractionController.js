@@ -796,6 +796,7 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
     }
 
     let extractedText = "";
+    let visionFullTextAnnotation = null; // kept for spatial (bounding-box) extraction
 
     try {
       const request = {
@@ -816,6 +817,8 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
 
       if (result.fullTextAnnotation && result.fullTextAnnotation.text) {
         extractedText = result.fullTextAnnotation.text;
+        // Preserve full annotation for spatial (bounding-box) row extraction
+        visionFullTextAnnotation = result.fullTextAnnotation;
       } else if (result.textAnnotations && result.textAnnotations.length > 0) {
         extractedText = result.textAnnotations
           .map((item) => item.description)
@@ -885,7 +888,16 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
     console.log(extractedText);
     console.log("🧾 RAW OCR TEXT END\n");
 
-    const extractedMedicines = extractMedicineRowsFromPrescription(extractedText);
+    // Primary: spatial (bounding-box) extraction — groups Vision words by Y-coordinate
+    // so each medicine's name, dose, frequency, duration, qty are parsed together
+    // from the same visual row, preventing cross-row data contamination.
+    // Fallback: text-based extraction for PDFs or when spatial data is unavailable.
+    let extractedMedicines =
+      extractMedicineRowsFromPrescriptionSpatial(visionFullTextAnnotation) ||
+      extractMedicineRowsFromPrescription(extractedText);
+
+    console.log(`📐 Extraction method: ${visionFullTextAnnotation ? "spatial (bounding-box)" : "text-based"}`);
+
 
     console.log("🧾 FINAL OCR MEDICINES:", JSON.stringify(extractedMedicines, null, 2));
 
