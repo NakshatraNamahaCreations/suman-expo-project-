@@ -856,14 +856,8 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
       });
     }
 
-    console.log(`✅ Extracted ${extractedText.length} characters`);
-    console.log("\n🧾 RAW OCR TEXT START");
-    console.log(extractedText);
-    console.log("🧾 RAW OCR TEXT END\n");
-
-    const extractedMedicines = extractMedicineRowsFromPrescription(extractedText);
-
-    console.log("🧾 FINAL OCR MEDICINES:", JSON.stringify(extractedMedicines, null, 2));
+    console.log(`✅ Document AI extracted ${extractedText.length} chars, ${extractedMedicines.length} medicines`);
+    console.log("💊 Document AI medicines:", JSON.stringify(extractedMedicines, null, 2));
 
     if (extractedMedicines.length === 0) {
       // If userId provided, save the file to user's library before any cleanup
