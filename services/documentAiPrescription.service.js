@@ -337,11 +337,12 @@ async function extractPrescriptionData(imageBuffer, mimeType) {
 
   const extractedText = document.text || "";
 
-  // Count detected tables for diagnostics
+  // Count detected tables + log first 800 chars of raw text for diagnostics
   const tableCount = (document.pages || []).reduce(
     (n, p) => n + (p.tables || []).length, 0
   );
   console.log(`📊 Document AI detected ${tableCount} table(s)`);
+  console.log(`📄 Raw text (first 800 chars):\n${extractedText.substring(0, 800)}`);
 
   // Primary: table-structured extraction
   let medicines  = extractFromTables(document);
