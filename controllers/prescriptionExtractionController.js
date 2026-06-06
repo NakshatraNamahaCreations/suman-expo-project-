@@ -1,23 +1,23 @@
 "use strict";
 
 const axios  = require("axios");
-const vision = require("@google-cloud/vision");
 const Medicine = require("../models/Medicine");
 const UserPrescriptionFile = require("../models/UserPrescriptionFile");
 const { deleteFromCloudinary } = require("../config/cloudinary");
-
-const visionClient = new vision.ImageAnnotatorClient();
+const { extractPrescriptionData } = require("../services/documentAiPrescription.service");
 
 // ─── Name normaliser ──────────────────────────────────────────────────────────
+// Strips dosage-form prefixes ONLY — used for DB matching, not for display.
+// "TABLET ANGIORELAX 2.6" → "ANGIORELAX 2.6" so it matches DB entry "ANGIORELAX 2.6"
+
+const FORM_PREFIX_RE =
+  /\b(TABLET|TAB|CAPSULE|CAP|INJECTION|INJ|CREAM|OINTMENT|SYRUP|SYP|DROP|DROPS)\b/gi;
 
 function normalizeMedicineName(text = "") {
   return String(text)
     .toUpperCase()
+    .replace(FORM_PREFIX_RE, " ")
     .replace(/[^\w\s]/g, " ")
-    .replace(
-      /\b(TABLET|TAB|CAPSULE|CAP|INJECTION|INJ|CREAM|OINTMENT|SYRUP|SYP|DROP|DROPS)\b/g,
-      " "
-    )
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -31,24 +31,25 @@ function getMedicineMatchScore(ocrName = "", dbName = "") {
   const db  = normalizeMedicineName(dbName);
 
   if (!ocr || !db) return 0;
-  if (ocr === db) return 100;
+  if (ocr === db)  return 100;
 
   const ocrTokens = ocr.split(" ").filter(Boolean);
   const dbTokens  = db.split(" ").filter(Boolean);
 
   if (!ocrTokens.length || !dbTokens.length) return 0;
 
-  // Primary word must match (or be a substring)
+  // Primary word must match (or one must contain the other)
   if (ocrTokens[0] !== dbTokens[0]) {
     if (!ocr.includes(dbTokens[0]) && !db.includes(ocrTokens[0])) return 0;
   }
 
-  // Token overlap
+  // Token overlap score
   let common = 0;
   for (const t of ocrTokens) {
     if (dbTokens.includes(t)) common++;
   }
-  const overlapScore = (common / Math.max(ocrTokens.length, dbTokens.length)) * 100;
+  const overlapScore =
+    (common / Math.max(ocrTokens.length, dbTokens.length)) * 100;
 
   // Substring bonus
   const subScore = ocr.includes(db) || db.includes(ocr) ? 90 : 0;
@@ -56,58 +57,26 @@ function getMedicineMatchScore(ocrName = "", dbName = "") {
   return Math.round(Math.max(overlapScore, subScore));
 }
 
-// ─── Extract medicine names from OCR text ────────────────────────────────────
-
-function extractMedicineNames(text = "") {
-  const skipWords = [
-    "investigation", "signature", "doctor", "patient", "date", "age",
-    "notes", "footer", "hemoglobin", "leukocyte", "platelet", "creatinine",
-    "uric", "hba1c", "crp", "ecg", "echo", "ppbs", "fbs",
-  ];
-
-  const lines = String(text).split(/\n+/);
-  const names = [];
-
-  for (const rawLine of lines) {
-    let med = rawLine.trim();
-    if (!med || med.length < 3) continue;
-    if (skipWords.some((w) => med.toLowerCase().includes(w))) continue;
-    if (/^\d+$/.test(med)) continue;
-
-    // Remove row numbers
-    med = med.replace(/^\d+[\.\)]\s*/, "");
-
-    // Clip at dosage / frequency / duration tokens
-    med = med.split(
-      /\s+(\d+-\d+-\d+|\d+\s*(tablet|tab|capsule|cap|mg|ml|gm|drop|days?|weeks?|morning|evening|night|bd|td|od))/i
-    )[0];
-
-    med = med.trim().replace(/[^\w\s\-]/g, "").trim();
-
-    if (med && med.length >= 3 && /[a-zA-Z]/.test(med) && !names.includes(med)) {
-      names.push(med);
-    }
-  }
-
-  return names;
-}
-
 // ─── Database matching ────────────────────────────────────────────────────────
 
-async function matchMedicinesWithDatabase(medicineNames) {
+async function matchMedicinesWithDatabase(ocrMedicines) {
   const matched = [];
 
   try {
     const dbMedicines = await Medicine.find({ status: "Active" }).lean();
 
-    for (const ocrName of medicineNames) {
+    for (const ocrMed of ocrMedicines) {
+      const ocrName = ocrMed.medicineName || ocrMed.name || "";
       if (!ocrName) continue;
 
       let bestMatch = null;
       let bestScore = 0;
 
       for (const dbMed of dbMedicines) {
-        const score = getMedicineMatchScore(ocrName, dbMed.description || dbMed.name || "");
+        const score = getMedicineMatchScore(
+          ocrName,
+          dbMed.description || dbMed.name || ""
+        );
         if (score > bestScore) {
           bestScore = score;
           bestMatch = dbMed;
@@ -115,38 +84,61 @@ async function matchMedicinesWithDatabase(medicineNames) {
       }
 
       if (bestMatch && bestScore >= MIN_MATCH_SCORE) {
+        const durationDays = ocrMed.durationDays || 0;
+
         matched.push({
+          // ── DB identity ──────────────────────────────────────────────────
           _id:        bestMatch._id.toString(),
           medicineId: bestMatch._id.toString(),
 
+          // ── Display name (from DB) ───────────────────────────────────────
           description: bestMatch.description,
           name:        bestMatch.description,
 
+          // ── DB meta ──────────────────────────────────────────────────────
           mfr:    bestMatch.mfr    || "N/A",
           vendor: bestMatch.vendor || "N/A",
           pack:   bestMatch.pack   || "N/A",
 
-          price:   bestMatch.newMrp || bestMatch.mrp || 0,
-          mrp:     bestMatch.newMrp || bestMatch.mrp || 0,
-          newMrp:  bestMatch.newMrp || 0,
+          // ── Pricing ───────────────────────────────────────────────────────
+          price:        bestMatch.newMrp || bestMatch.mrp || 0,
+          mrp:          bestMatch.newMrp || bestMatch.mrp || 0,
+          newMrp:       bestMatch.newMrp || 0,
+          netValue:     bestMatch.netValue     || 0,
+          taxableValue: bestMatch.taxableValue || 0,
 
-          netValue:      bestMatch.netValue      || 0,
-          taxableValue:  bestMatch.taxableValue  || 0,
-
-          qty:               bestMatch.qty || 0,
-          stock:             bestMatch.qty || 0,
+          // ── DB STOCK ONLY ─────────────────────────────────────────────────
+          qty:               bestMatch.qty || 0,   // DB stock
+          stock:             bestMatch.qty || 0,   // DB stock (alias)
+          availableQuantity: bestMatch.qty || 0,   // DB stock (alias)
           inStock:           (bestMatch.qty || 0) > 0,
-          availableQuantity: bestMatch.qty || 0,
 
           gstPercent: bestMatch.gstPercent || 5,
           hsnCode:    bestMatch.hsnCode    || "",
           batchNo:    bestMatch.batchNo    || "",
 
+          // ── OCR clinical fields (per-row, never mixed) ────────────────────
+          dose:          ocrMed.dose          || "",
+          frequency:     ocrMed.frequency     || "",
+          freqLabel:     ocrMed.frequency     || ocrMed.freqLabel || "",
+          instruction:   ocrMed.instruction   || "",
+          durationLabel: ocrMed.durationLabel || "",
+          durationDays,
+          duration:      durationDays,
+
+          // ── PRESCRIPTION QTY ONLY (never DB stock) ────────────────────────
+          prescriptionQty: ocrMed.prescriptionQty || null,
+          calculatedQty:   ocrMed.calculatedQty   || null,
+          quantity:        ocrMed.quantity         || ocrMed.prescriptionQty || null,
+          orderQty:        ocrMed.orderQty         || ocrMed.prescriptionQty || null,
+          requiredQty:     ocrMed.requiredQty      || ocrMed.prescriptionQty || null,
+
+          // ── Match metadata ────────────────────────────────────────────────
           ocrMedicineName: ocrName,
           matchScore:      bestScore,
         });
       } else {
-        console.log(`⚠️ No match: "${ocrName}" (best score ${bestScore})`);
+        console.log(`⚠️  No DB match: "${ocrName}" (best score: ${bestScore})`);
       }
     }
   } catch (err) {
@@ -158,7 +150,9 @@ async function matchMedicinesWithDatabase(medicineNames) {
 
 // ─── Save prescription file record ───────────────────────────────────────────
 
-async function maybeSaveFile({ userId, patientId, cloudinaryUrl, cloudinaryPublicId, mimeType, fileName, fileSize }) {
+async function maybeSaveFile({
+  userId, patientId, cloudinaryUrl, cloudinaryPublicId, mimeType, fileName, fileSize,
+}) {
   if (!userId) return null;
   try {
     const fileType = mimeType?.includes("pdf") ? "pdf" : "image";
@@ -173,7 +167,7 @@ async function maybeSaveFile({ userId, patientId, cloudinaryUrl, cloudinaryPubli
       fileSize,
     });
   } catch (err) {
-    console.error("Error saving prescription file:", err.message);
+    console.error("Error saving prescription file record:", err.message);
     return null;
   }
 }
@@ -181,12 +175,13 @@ async function maybeSaveFile({ userId, patientId, cloudinaryUrl, cloudinaryPubli
 // ─── Main handler ─────────────────────────────────────────────────────────────
 
 exports.extractMedicinesFromPrescription = async (req, res) => {
+  // multer-storage-cloudinary: req.file.path = Cloudinary URL, req.file.filename = public_id
   const cloudinaryUrl      = req.file?.path;
   const cloudinaryPublicId = req.file?.filename;
-  const mimeType           = req.file?.mimetype || "image/jpeg";
+  const mimeType           = req.file?.mimetype   || "image/jpeg";
   const fileName           = req.file?.originalname || "prescription";
-  const fileSize           = req.file?.size || 0;
-  const userId             = req.body?.userId  || req.query?.userId  || null;
+  const fileSize           = req.file?.size        || 0;
+  const userId             = req.body?.userId    || req.query?.userId    || null;
   const patientId          = req.body?.patientId || req.query?.patientId || null;
 
   if (!cloudinaryUrl) {
@@ -199,7 +194,10 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
   // ── 1. Download image buffer from Cloudinary ──────────────────────────────
   let imageBuffer;
   try {
-    const dl = await axios.get(cloudinaryUrl, { responseType: "arraybuffer", timeout: 30000 });
+    const dl = await axios.get(cloudinaryUrl, {
+      responseType: "arraybuffer",
+      timeout:      30_000,
+    });
     imageBuffer = Buffer.from(dl.data);
     console.log(`✅ Downloaded ${imageBuffer.length} bytes from Cloudinary`);
   } catch (dlErr) {
@@ -211,31 +209,27 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
     });
   }
 
-  // ── 2. Google Vision OCR ──────────────────────────────────────────────────
-  let extractedText = "";
-  try {
-    console.log("🔍 Extracting text with Google Vision OCR...");
-    const [result] = await visionClient.annotateImage({
-      image:    { content: imageBuffer },
-      features: [{ type: "TEXT_DETECTION" }],
-    });
+  // ── 2. Document AI extraction ──────────────────────────────────────────────
+  let extractedText      = "";
+  let extractedMedicines = [];
 
-    if (result.fullTextAnnotation?.text) {
-      extractedText = result.fullTextAnnotation.text;
-    } else if (result.textAnnotations?.length) {
-      extractedText = result.textAnnotations.map((t) => t.description).join("\n");
-    }
-    console.log(`✅ OCR extracted ${extractedText.length} characters`);
-  } catch (ocrErr) {
-    console.error("❌ Vision OCR error:", ocrErr.message);
+  try {
+    const docResult     = await extractPrescriptionData(imageBuffer, mimeType);
+    extractedText       = docResult.extractedText;
+    extractedMedicines  = docResult.medicines || [];
+  } catch (docErr) {
+    console.error("❌ Document AI error:", docErr.message);
     try { await deleteFromCloudinary(cloudinaryPublicId, "auto"); } catch {}
     return res.status(400).json({
       success: false,
-      message: "Could not read the prescription. Please upload a clear, well-lit image or PDF.",
+      message:
+        "Could not read the prescription. Please upload a clear, well-lit image or PDF.",
     });
   }
 
-  // ── 3. Handle empty text ──────────────────────────────────────────────────
+  console.log(`✅ Document AI: ${extractedText.length} chars, ${extractedMedicines.length} medicine(s)`);
+
+  // ── 3. Empty text ──────────────────────────────────────────────────────────
   if (!extractedText || extractedText.trim().length === 0) {
     await maybeSaveFile({ userId, patientId, cloudinaryUrl, cloudinaryPublicId, mimeType, fileName, fileSize });
     return res.json({
@@ -251,11 +245,8 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
     });
   }
 
-  // ── 4. Extract medicine names from text ───────────────────────────────────
-  const medicineNames = extractMedicineNames(extractedText);
-  console.log(`💊 Found ${medicineNames.length} medicine name(s):`, medicineNames);
-
-  if (medicineNames.length === 0) {
+  // ── 4. No medicines extracted ──────────────────────────────────────────────
+  if (extractedMedicines.length === 0) {
     await maybeSaveFile({ userId, patientId, cloudinaryUrl, cloudinaryPublicId, mimeType, fileName, fileSize });
     return res.json({
       success: true,
@@ -270,10 +261,10 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
     });
   }
 
-  // ── 5. Match with database ────────────────────────────────────────────────
+  // ── 5. Match with Medicine database ───────────────────────────────────────
   console.log("🔗 Matching medicines with database…");
-  const matchedMedicines = await matchMedicinesWithDatabase(medicineNames);
-  console.log(`✅ Matched ${matchedMedicines.length} / ${medicineNames.length} medicines`);
+  const matchedMedicines = await matchMedicinesWithDatabase(extractedMedicines);
+  console.log(`✅ Matched ${matchedMedicines.length} / ${extractedMedicines.length}`);
 
   // ── 6. Save prescription file record ──────────────────────────────────────
   const savedFile = await maybeSaveFile({
@@ -282,23 +273,26 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
 
   return res.json({
     success: true,
-    message: matchedMedicines.length > 0
-      ? `Found ${matchedMedicines.length} medicine(s)`
-      : "No matching medicines found in our database",
+    message:
+      matchedMedicines.length > 0
+        ? `Found ${matchedMedicines.length} medicine(s)`
+        : "No matching medicines found in our database",
     extractedText,
-    extractedMedicines: medicineNames,
+    extractedMedicines,
     matchedMedicines,
     medicines: matchedMedicines,
     matchedCount: matchedMedicines.length,
-    prescriptionUrl:   cloudinaryUrl,
-    publicId:          cloudinaryPublicId,
+    prescriptionUrl:    cloudinaryUrl,
+    publicId:           cloudinaryPublicId,
     prescriptionFileId: savedFile?._id || null,
-    prescriptionFile: savedFile ? {
-      _id:              savedFile._id,
-      cloudinaryUrl:    savedFile.cloudinaryUrl,
-      publicId:         savedFile.publicId,
-      fileType:         savedFile.fileType,
-      originalFileName: savedFile.originalFileName,
-    } : null,
+    prescriptionFile: savedFile
+      ? {
+          _id:              savedFile._id,
+          cloudinaryUrl:    savedFile.cloudinaryUrl,
+          publicId:         savedFile.publicId,
+          fileType:         savedFile.fileType,
+          originalFileName: savedFile.originalFileName,
+        }
+      : null,
   });
 };
