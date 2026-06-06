@@ -684,14 +684,11 @@
 // }
 
 
-const fs = require("fs");
 const axios = require("axios");
-const vision = require("@google-cloud/vision");
 const Medicine = require("../models/Medicine");
 const UserPrescriptionFile = require("../models/UserPrescriptionFile");
 const { deleteFromCloudinary } = require("../config/cloudinary");
-
-const client = new vision.ImageAnnotatorClient();
+const { extractPrescriptionData } = require("../services/documentAiPrescription.service");
 
 /**
  * Save prescription file info to UserPrescriptionFile collection.
@@ -758,7 +755,7 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
       });
     }
 
-    console.log("🔍 Extracting text with Google Vision DOCUMENT_TEXT_DETECTION...");
+    console.log("🤖 Processing prescription with Google Document AI Form Parser...");
 
     // Fetch image from Cloudinary URL and convert to buffer
     let imageBuffer;
@@ -795,43 +792,22 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
       });
     }
 
+    // ── Call Document AI Form Parser ──────────────────────────────────────────
     let extractedText = "";
+    let extractedMedicines = [];
 
     try {
-      const request = {
-        image: {
-          content: imageBuffer,
-        },
-        features: [
-          {
-            type: "DOCUMENT_TEXT_DETECTION",
-          },
-        ],
-        imageContext: {
-          languageHints: ["en"],
-        },
-      };
-
-      const [result] = await client.annotateImage(request);
-
-      if (result.fullTextAnnotation && result.fullTextAnnotation.text) {
-        extractedText = result.fullTextAnnotation.text;
-      } else if (result.textAnnotations && result.textAnnotations.length > 0) {
-        extractedText = result.textAnnotations
-          .map((item) => item.description)
-          .join("\n");
-      }
-    } catch (ocrError) {
-      console.error("❌ OCR Error:", ocrError.message);
-
-      // Clean up from Cloudinary on OCR error
+      const docAiResult = await extractPrescriptionData(imageBuffer, mimeType);
+      extractedText      = docAiResult.extractedText;
+      extractedMedicines = docAiResult.medicines;
+    } catch (docAiError) {
+      console.error("❌ Document AI Error:", docAiError.message);
       try {
         await deleteFromCloudinary(cloudinaryPublicId, "auto");
-        console.log("✅ Cleaned up prescription from Cloudinary after OCR error");
+        console.log("✅ Cleaned up prescription from Cloudinary after Document AI error");
       } catch (deleteError) {
         console.error("Warning: Could not delete file from Cloudinary:", deleteError.message);
       }
-
       return res.status(400).json({
         success: false,
         message: "Could not read the prescription. Please upload a clear image or PDF.",
@@ -880,14 +856,8 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
       });
     }
 
-    console.log(`✅ Extracted ${extractedText.length} characters`);
-    console.log("\n🧾 RAW OCR TEXT START");
-    console.log(extractedText);
-    console.log("🧾 RAW OCR TEXT END\n");
-
-    const extractedMedicines = extractMedicineRowsFromPrescription(extractedText);
-
-    console.log("🧾 FINAL OCR MEDICINES:", JSON.stringify(extractedMedicines, null, 2));
+    console.log(`✅ Document AI extracted ${extractedText.length} characters, ${extractedMedicines.length} medicines`);
+    console.log("🧾 EXTRACTED MEDICINES:", JSON.stringify(extractedMedicines, null, 2));
 
     if (extractedMedicines.length === 0) {
       // If userId provided, save the file to user's library before any cleanup
@@ -931,7 +901,7 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
       });
     }
 
-    console.log("🔗 Matching OCR medicines with database by medicine name only...");
+    console.log("🔗 Matching Document AI medicines with database...");
 
     const matchedMedicines = await matchMedicinesWithDatabase(extractedMedicines);
 
@@ -1422,8 +1392,12 @@ async function matchMedicinesWithDatabase(extractedMedicines) {
           // Original OCR duration text
           durationLabel: ocrMed.durationLabel || "",
 
-          // Qty directly from the prescription's Qty column (null if not found)
+          // Prescription quantities — never DB stock, always from OCR/calculation
           prescriptionQty: ocrMed.prescriptionQty || null,
+          calculatedQty:   ocrMed.calculatedQty   || null,
+          quantity:        ocrMed.quantity         || ocrMed.prescriptionQty || ocrMed.calculatedQty || null,
+          orderQty:        ocrMed.orderQty         || ocrMed.prescriptionQty || ocrMed.calculatedQty || null,
+          requiredQty:     ocrMed.requiredQty      || ocrMed.prescriptionQty || ocrMed.calculatedQty || null,
 
           ocrMedicineName: ocrName,
           matchScore: bestScore,
