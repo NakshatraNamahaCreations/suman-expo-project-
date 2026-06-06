@@ -96,13 +96,16 @@ function cleanFrequency(v) {
   if (!raw) return "";
 
   // ── 1. Digit N-N-N pattern ─────────────────────────────────────────────────
-  // Accepts dash / dot / slash / pipe / × as separator, and O/o → 0 for OCR errors.
-  // Handles "1-0-1", "1.0.1", "1/0/1", "1 - 0 - 1", "1-O-1" etc.
+  // Accepts any common separator and fixes OCR digit-look-alike characters.
   const forDigit = raw
     .replace(/\s+/g, "")
-    .replace(/[–—·•]/g, "-")
-    .replace(/[|_×\.\/]/g, "-")
-    .replace(/[Oo]/g, "0");
+    // All Unicode dash/bullet variants → "-"
+    .replace(/[‐‑‒–—―−–—·•]/g, "-")
+    // Pipe, underscore, ×, slash, plus → "-"
+    .replace(/[|_×\/\+]/g, "-")
+    // OCR substitutions: O/o → 0,  I/l → 1
+    .replace(/[Oo]/g, "0")
+    .replace(/[Il]/g, "1");
   const m = forDigit.match(/\d-\d-\d/);
   if (m) return m[0];
 
@@ -337,37 +340,50 @@ function parseTablesFromDocument(document) {
 
         // Get frequency from dedicated column
         let freqRaw = get(freqIdx);
+        console.log(`   🔍 freq col[${freqIdx}] raw: "${freqRaw}"`);
 
-        // Natural language on dedicated freq column ONLY (not in cleanFrequency, to
-        // avoid false positives when scanning instruction/name cells later).
-        // Handles "MORNING", "AT NIGHT", "TWICE DAILY", "ONCE DAILY", etc.
+        // Natural language on the dedicated freq column ONLY — NOT inside cleanFrequency,
+        // because those words (MORNING, NIGHT, ONCE…) appear legitimately in instruction
+        // cells and would cause false positives during the cell scan.
         if (!cleanFrequency(freqRaw) && freqRaw.trim()) {
           const u = freqRaw.toUpperCase();
           const nlFreq =
-            /\bTWICE\b/.test(u)                               ? "1-0-1" :
-            /\bONCE\s*(DAILY|A\s+DAY)\b/.test(u)              ? "1-0-0" :
+            /\bTWICE\b/.test(u)                                ? "1-0-1" :
+            /\bONCE\b/.test(u) || /\bDAILY\b/.test(u)         ? "1-0-0" :
             /\b(THRICE|THREE\s+TIMES)\b/.test(u)               ? "1-1-1" :
-            (/\bMORNING\b/.test(u) && !/\bNIGHT\b/.test(u))  ? "1-0-0" :
+            (/\bMORNING\b/.test(u) && !/\bNIGHT\b/.test(u))   ? "1-0-0" :
             (/\bNIGHT\b/.test(u)   && !/\bMORNING\b/.test(u)) ? "0-0-1" :
             /\bBEDTIME\b/.test(u)                              ? "0-0-1" : "";
-          if (nlFreq) freqRaw = nlFreq; // now in N-N-N form — cleanFrequency will accept it
+          if (nlFreq) {
+            console.log(`   🔍 freq NL resolved: "${freqRaw}" → "${nlFreq}"`);
+            freqRaw = nlFreq;
+          }
         }
 
-        // If still unrecognized, scan other cells.
-        // Skip the medicine name cell (e.g. "CEZIN OD" contains "OD" but is not a freq)
-        // Skip the instruction cell (e.g. "After Food at Night" contains "Night" — not freq)
+        // If still unrecognized, scan other cells — but SKIP the name cell (brand names
+        // like "CEZIN OD" contain "OD") and the instruction cell ("At Night" contains
+        // "Night") to avoid false positives.
         if (!cleanFrequency(freqRaw)) {
           for (let ci = 0; ci < cells.length; ci++) {
             if (ci === nameIdx || ci === instrIdx) continue;
             const cellText = getTextFromLayout(document, cells[ci]?.layout);
-            if (cleanFrequency(cellText)) { freqRaw = cellText; break; }
+            if (cleanFrequency(cellText)) {
+              console.log(`   🔍 freq found in cell[${ci}]: "${cellText}"`);
+              freqRaw = cellText; break;
+            }
           }
-          // Last resort: digit freq pattern embedded in the medicine name
-          // e.g. "MOMATE 0.1% 0-0-1" where the prescriber appended the freq
+          // Last resort: digit pattern embedded in the name (e.g. "MOMATE 0.1% 0-0-1")
           if (!cleanFrequency(freqRaw)) {
             const freqInName = rawName.match(FREQ_RE);
-            if (freqInName) freqRaw = freqInName[0];
+            if (freqInName) {
+              console.log(`   🔍 freq extracted from name: "${freqInName[0]}"`);
+              freqRaw = freqInName[0];
+            }
           }
+        }
+
+        if (!cleanFrequency(freqRaw)) {
+          console.log(`   ⚠️  freq UNRESOLVED for "${medName}" — cell was: "${get(freqIdx)}"`);
         }
 
         // Get duration — dedicated column first, then scan all cells
