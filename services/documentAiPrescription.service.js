@@ -120,6 +120,11 @@ function cleanFrequency(v) {
   if (norm === "HS" || norm === "SOS")                   return "0-0-1";
 
   // ── 4. Word-boundary — handles "BD (Twice Daily)", "OD - once a day", etc. ─
+  // IMPORTANT: Do NOT add natural-language words (MORNING, NIGHT, TWICE…) here.
+  // This function is also used when scanning non-freq cells; those words appear
+  // legitimately in instruction cells ("At Night", "Once After Food") and would
+  // produce false-positive frequencies.  Natural language is handled separately
+  // only for the dedicated frequency column — see parseTablesFromDocument.
   const u = raw.toUpperCase();
   if (/\bOD\b/.test(u))         return "1-0-0";
   if (/\b(BD|BID)\b/.test(u))   return "1-0-1";
@@ -127,14 +132,6 @@ function cleanFrequency(v) {
   if (/\bQID\b/.test(u))        return "1-1-1";
   if (/\bHS\b/.test(u))         return "0-0-1";
   if (/\bSOS\b/.test(u))        return "0-0-1";
-
-  // ── 5. Natural language ────────────────────────────────────────────────────
-  if (/\bTWICE\b/.test(u))                              return "1-0-1";
-  if (/\bONCE\s*(DAILY|A\s+DAY)\b/.test(u))            return "1-0-0";
-  if (/\b(THRICE|THREE\s+TIMES)\b/.test(u))             return "1-1-1";
-  if (/\bMORNING\b/.test(u) && !/\bNIGHT\b/.test(u))  return "1-0-0";
-  if (/\bNIGHT\b/.test(u)   && !/\bMORNING\b/.test(u)) return "0-0-1";
-  if (/\bBEDTIME\b/.test(u))                            return "0-0-1";
 
   return "";
 }
@@ -338,15 +335,35 @@ function parseTablesFromDocument(document) {
         if (seen.has(key)) continue;
         seen.add(key);
 
-        // Get frequency — first try dedicated column, then scan ALL cells in row
+        // Get frequency from dedicated column
         let freqRaw = get(freqIdx);
+
+        // Natural language on dedicated freq column ONLY (not in cleanFrequency, to
+        // avoid false positives when scanning instruction/name cells later).
+        // Handles "MORNING", "AT NIGHT", "TWICE DAILY", "ONCE DAILY", etc.
+        if (!cleanFrequency(freqRaw) && freqRaw.trim()) {
+          const u = freqRaw.toUpperCase();
+          const nlFreq =
+            /\bTWICE\b/.test(u)                               ? "1-0-1" :
+            /\bONCE\s*(DAILY|A\s+DAY)\b/.test(u)              ? "1-0-0" :
+            /\b(THRICE|THREE\s+TIMES)\b/.test(u)               ? "1-1-1" :
+            (/\bMORNING\b/.test(u) && !/\bNIGHT\b/.test(u))  ? "1-0-0" :
+            (/\bNIGHT\b/.test(u)   && !/\bMORNING\b/.test(u)) ? "0-0-1" :
+            /\bBEDTIME\b/.test(u)                              ? "0-0-1" : "";
+          if (nlFreq) freqRaw = nlFreq; // now in N-N-N form — cleanFrequency will accept it
+        }
+
+        // If still unrecognized, scan other cells.
+        // Skip the medicine name cell (e.g. "CEZIN OD" contains "OD" but is not a freq)
+        // Skip the instruction cell (e.g. "After Food at Night" contains "Night" — not freq)
         if (!cleanFrequency(freqRaw)) {
-          // Scan every cell in this row for a freq pattern
-          for (const cell of cells) {
-            const cellText = getTextFromLayout(document, cell?.layout);
+          for (let ci = 0; ci < cells.length; ci++) {
+            if (ci === nameIdx || ci === instrIdx) continue;
+            const cellText = getTextFromLayout(document, cells[ci]?.layout);
             if (cleanFrequency(cellText)) { freqRaw = cellText; break; }
           }
-          // Also try the medicine name cell itself (e.g. "MOMATE 0.1% 0-0-1")
+          // Last resort: digit freq pattern embedded in the medicine name
+          // e.g. "MOMATE 0.1% 0-0-1" where the prescriber appended the freq
           if (!cleanFrequency(freqRaw)) {
             const freqInName = rawName.match(FREQ_RE);
             if (freqInName) freqRaw = freqInName[0];
