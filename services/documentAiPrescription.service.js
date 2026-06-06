@@ -337,7 +337,21 @@ function parseTablesFromDocument(document) {
           }
         }
 
-        const qtyRaw = Number(get(qtyIdx).replace(/[^\d]/g, "") || 0) || 0;
+        // Safe qty extraction — avoids concatenating digits from merged cells.
+        // e.g. "6 Month(s) 180" → must give 180, NOT 6180.
+        const qtyStr  = get(qtyIdx).trim();
+        const qtyNums = (qtyStr.match(/\d+/g) || []).map(Number);
+        let qtyRaw = 0;
+        if (qtyNums.length > 1) {
+          // Multiple numbers: duration digit(s) come first, qty is LAST
+          qtyRaw = qtyNums[qtyNums.length - 1];
+        } else if (qtyNums.length === 1 && !/\b(month|day|week)\b/i.test(qtyStr)) {
+          // Single number with no duration word: it really is the qty
+          qtyRaw = qtyNums[0];
+        }
+        // Single number inside duration text (e.g. "6 Month(s)") → qtyRaw stays 0
+        // → buildMedicineRow will fall back to calculated qty (dose × freq × days)
+        console.log(`   qty cell: "${qtyStr}" → qtyRaw:${qtyRaw}`);
 
         const med = buildMedicineRow({
           medicineName:  medName,
