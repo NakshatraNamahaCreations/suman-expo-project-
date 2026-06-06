@@ -13,12 +13,11 @@ const LOCATION     = process.env.DOCUMENT_AI_LOCATION   || "us";
 const PROJECT_ID   = process.env.DOCUMENT_AI_PROJECT_ID;
 const PROCESSOR_ID = process.env.DOCUMENT_AI_PROCESSOR_ID;
 
-// Regional endpoint is REQUIRED — without it requests fail for US processors
 const client = new DocumentProcessorServiceClient({
   apiEndpoint: `${LOCATION}-documentai.googleapis.com`,
 });
 
-// ─── Text extraction helpers ──────────────────────────────────────────────────
+// ─── Text helpers ─────────────────────────────────────────────────────────────
 
 function getTextFromLayout(document, layout) {
   if (!layout?.textAnchor?.textSegments?.length) return "";
@@ -38,7 +37,7 @@ function normalizeHeader(v) {
 }
 
 function findHeaderIndex(headerCells, keywords) {
-  const normalized = headerCells.map((h) => normalizeHeader(h));
+  const normalized = headerCells.map(normalizeHeader);
   for (const kw of keywords) {
     const n = normalizeHeader(kw);
     const i = normalized.findIndex((h) => h === n || h.includes(n));
@@ -47,11 +46,31 @@ function findHeaderIndex(headerCells, keywords) {
   return -1;
 }
 
+// ─── Patterns ─────────────────────────────────────────────────────────────────
+
+// Pure freq pattern: "1-0-1", "0 - 0 - 1", etc.
+const PURE_FREQ_RE = /^\s*\d\s*[-–—|]\s*\d\s*[-–—|]\s*\d\s*$/;
+
+// Freq pattern anywhere in text
+const FREQ_RE = /\b(\d)\s*[-–—|_]\s*(\d)\s*[-–—|_]\s*(\d)\b/;
+
+// Duration pattern
+const DUR_RE = /\b(\d+)\s*(month|months|day|days|week|weeks)\b/i;
+
+// Lab/investigation lines — skip entirely
+const LAB_LINE_RE = /\b(hemoglobin|leukocyte|platelet|creatinine|uric[\s-]?acid|investigation|hba1c|hs[\s-]?crp|ecg|echo|ppbs|fbs)\b/i;
+
+// Medicine keyword (TABLET, CAP, etc.)
+const MED_KEYWORD_RE = /\b(TABLET|TAB|CAPSULE|CAP|SYRUP|SYP|INJECTION|INJ|CREAM|OINTMENT|DROP|DROPS)\b/i;
+
+// Table header keywords to skip
+const HEADER_RE = /^(brand|strength|dose|frequency|freq|instruction|duration|qty|quantity|rx|#|s\.?no\.?|no\.?|medicine|drug|name)$/i;
+
 // ─── Field cleaners ───────────────────────────────────────────────────────────
 
 function cleanMedicineName(v) {
   return String(v || "")
-    .replace(/^\d+[\.\)]\s*/, "")   // strip leading row-number  ("1." / "2)")
+    .replace(/^\d+[\.\)]\s*/, "")     // strip leading row-number "1." "2)"
     .replace(/\bRx\b/gi, "")
     .replace(/\s+/g, " ")
     .trim();
@@ -64,22 +83,35 @@ function cleanDose(v) {
   const qty  = m[1];
   const raw  = m[2].toLowerCase();
   let unit   = "Tablet";
-  if (raw.startsWith("cap"))   unit = "Capsule";
-  else if (raw === "ml")       unit = "ml";
-  else if (raw.startsWith("drop")) unit = "Drops";
+  if (raw.startsWith("cap"))        unit = "Capsule";
+  else if (raw === "ml")            unit = "ml";
+  else if (raw.startsWith("drop"))  unit = "Drops";
   else if (raw.startsWith("spoon")) unit = "Spoon";
-  else if (raw === "unit")     unit = "Unit";
+  else if (raw === "unit")          unit = "Unit";
   return `${qty} ${unit}`;
 }
 
 function cleanFrequency(v) {
+  // Normalise separators & OCR mistakes
   const text = String(v || "")
     .replace(/\s+/g, "")
     .replace(/[–—]/g, "-")
     .replace(/[|_]/g, "-")
-    .replace(/[Oo]/g, "0");        // OCR often confuses O with 0
+    .replace(/[Oo]/g, "0");
+
+  // N-N-N pattern (most reliable)
   const m = text.match(/\d-\d-\d/);
-  return m ? m[0] : "";
+  if (m) return m[0];
+
+  // BD / OD / TDS / QID abbreviations
+  const upper = String(v || "").toUpperCase().replace(/\s+/g, "");
+  if (upper === "OD")               return "1-0-0";
+  if (upper === "BD" || upper === "BID") return "1-0-1";
+  if (upper === "TDS" || upper === "TID" || upper === "TD") return "1-1-1";
+  if (upper === "QID" || upper === "QD") return "1-1-1";
+  if (upper === "HS" || upper === "SOS") return "0-0-1";
+
+  return "";
 }
 
 function cleanInstruction(v) {
@@ -114,12 +146,16 @@ function getDurationDays(label) {
 }
 
 function parseDoseCount(v) {
-  return Number(String(v || "").match(/\d+/)?.[0] || 1) || 1;
+  const n = Number(String(v || "").match(/\d+/)?.[0] || 1);
+  return (n > 0 ? n : 1);
 }
 
 function parseFreqPerDay(v) {
-  const parts = String(v || "").split("-").map((n) => Number(n) || 0);
-  return parts.length === 3 ? parts.reduce((s, n) => s + n, 0) : 0;
+  const parts = String(v || "").split("-").map((x) => parseInt(x, 10));
+  if (parts.length === 3 && parts.every((x) => !isNaN(x))) {
+    return parts.reduce((s, n) => s + n, 0);
+  }
+  return 0;
 }
 
 function calcQty(dose, frequency, durationDays) {
@@ -135,15 +171,20 @@ function buildMedicineRow({ medicineName, dose, frequency, instruction, duration
   const name = cleanMedicineName(medicineName || "");
   if (!name) return null;
 
+  // Skip row if name IS a frequency pattern (e.g. "1-0-1", "0-0-1")
+  if (PURE_FREQ_RE.test(name)) return null;
+
   const doseVal  = cleanDose(dose || "");
   const freqVal  = cleanFrequency(frequency || "");
   const instrVal = cleanInstruction(instruction || "");
   const durLabel = cleanDurationLabel(durationLabel || "");
   const durDays  = getDurationDays(durLabel);
   const calcQ    = calcQty(doseVal, freqVal, durDays);
-  const finalQty = Number(qtyFromTable || 0) || calcQ || 0;
+  const finalQty = (Number(qtyFromTable) > 0 ? Number(qtyFromTable) : 0) || calcQ || 0;
 
-  console.log(`📋 "${name}" | dose:${doseVal} | freq:${freqVal} | dur:${durLabel}(${durDays}d) | qty:${finalQty}`);
+  console.log(
+    `  📋 "${name}" | dose:${doseVal} | freq:${freqVal || "(none)"} | dur:${durLabel || "(none)"}(${durDays}d) | calcQty:${calcQ} | finalQty:${finalQty}`
+  );
 
   return {
     medicineName:    name,
@@ -165,24 +206,21 @@ function buildMedicineRow({ medicineName, dose, frequency, instruction, duration
 
 // ─── Table extraction (primary) ───────────────────────────────────────────────
 
-const REAL_HEADER_RE = /^(brand|strength|dose|frequency|freq|instruction|duration|qty|quantity|rx|#|no\.?|s\.?no\.?|medicine|drug|name)$/i;
-
 function parseTablesFromDocument(document) {
   const medicines = [];
   const seen      = new Set();
 
   for (const page of document.pages || []) {
-    for (const table of page.tables || []) {
+    for (const table of (page.tables || [])) {
 
-      // Collect header text from the actual header rows
+      // Collect header cell texts
       const headerTexts = (table.headerRows || []).flatMap((row) =>
         (row.cells || []).map((cell) => getTextFromLayout(document, cell.layout))
       );
 
-      // Attempt named-column detection; fall back to positional defaults.
-      // Positional order for typical Tamil Nadu prescription tables:
-      //   col 0 = Brand & Strength  col 1 = Dose  col 2 = Frequency
-      //   col 3 = Instruction       col 4 = Duration  col 5 = Qty
+      console.log(`\n📊 Table headers: [${headerTexts.join(" | ")}]`);
+
+      // Named column detection (with positional fallback)
       let nameIdx  = findHeaderIndex(headerTexts, ["brandstrength","brand","medicine","drug","name","rx"]);
       let doseIdx  = findHeaderIndex(headerTexts, ["dose"]);
       let freqIdx  = findHeaderIndex(headerTexts, ["frequency","freq"]);
@@ -190,15 +228,14 @@ function parseTablesFromDocument(document) {
       let durIdx   = findHeaderIndex(headerTexts, ["duration","period"]);
       let qtyIdx   = findHeaderIndex(headerTexts, ["qty","quantity"]);
 
-      // Detect row-number column — if col 0 of the first body row is "1.", "2.", …
-      // shift ALL positional defaults right by 1.
+      // Detect row-number column from first body row
       const firstBodyRow = (table.bodyRows || [])[0];
       let offset = 0;
       if (firstBodyRow) {
         const col0 = getTextFromLayout(document, firstBodyRow.cells?.[0]?.layout);
         if (/^\d+\.?\s*$/.test(col0.trim())) {
           offset = 1;
-          console.log("🔢 Row-number column detected — shifting column indices +1");
+          console.log("🔢 Row-number column detected (col 0 = row numbers) — shifting indices +1");
         }
       }
 
@@ -209,8 +246,9 @@ function parseTablesFromDocument(document) {
       if (durIdx   < 0) durIdx   = 4 + offset;
       if (qtyIdx   < 0) qtyIdx   = 5 + offset;
 
-      // Process headerRows + bodyRows together.
-      // Document AI sometimes places the first data row in headerRows.
+      console.log(`   Column map → name:${nameIdx} dose:${doseIdx} freq:${freqIdx} instr:${instrIdx} dur:${durIdx} qty:${qtyIdx}`);
+
+      // Process headerRows + bodyRows together (Document AI sometimes puts first data row in headerRows)
       const allRows = [
         ...(table.headerRows || []),
         ...(table.bodyRows   || []),
@@ -219,30 +257,69 @@ function parseTablesFromDocument(document) {
       for (const row of allRows) {
         const cells = row.cells || [];
         const get   = (idx) =>
-          idx >= 0 && idx < cells.length
+          (idx >= 0 && idx < cells.length)
             ? getTextFromLayout(document, cells[idx]?.layout)
             : "";
+
+        // Log all cell values for diagnosis
+        const allCellTexts = cells.map((c, i) => `[${i}]:${getTextFromLayout(document, c?.layout)}`).join(" ");
+        console.log(`   Row cells: ${allCellTexts}`);
 
         const rawName = get(nameIdx);
         if (!rawName || rawName.length < 2) continue;
 
-        // Skip actual column-header cells
-        if (REAL_HEADER_RE.test(rawName.trim())) continue;
+        // Skip actual column-header text
+        if (HEADER_RE.test(rawName.trim())) continue;
+
+        // Skip rows where cell looks like a pure frequency pattern
+        if (PURE_FREQ_RE.test(rawName.trim())) {
+          console.log(`   ⏭️  Skip: "${rawName}" looks like a frequency pattern`);
+          continue;
+        }
 
         const medName = rawName.replace(/^\d+[\.\)]\s*/, "").trim();
         if (medName.length < 2) continue;
+
+        // Skip if name is a pure freq pattern after cleanup
+        if (PURE_FREQ_RE.test(medName)) continue;
 
         const key = medName.toUpperCase().replace(/\s+/g, "");
         if (seen.has(key)) continue;
         seen.add(key);
 
+        // Get frequency — first try dedicated column, then scan ALL cells in row
+        let freqRaw = get(freqIdx);
+        if (!cleanFrequency(freqRaw)) {
+          // Scan every cell in this row for a freq pattern
+          for (const cell of cells) {
+            const cellText = getTextFromLayout(document, cell?.layout);
+            if (cleanFrequency(cellText)) { freqRaw = cellText; break; }
+          }
+          // Also try the medicine name cell itself (e.g. "MOMATE 0.1% 0-0-1")
+          if (!cleanFrequency(freqRaw)) {
+            const freqInName = rawName.match(FREQ_RE);
+            if (freqInName) freqRaw = freqInName[0];
+          }
+        }
+
+        // Get duration — dedicated column first, then scan all cells
+        let durRaw = get(durIdx);
+        if (!cleanDurationLabel(durRaw)) {
+          for (const cell of cells) {
+            const cellText = getTextFromLayout(document, cell?.layout);
+            if (cleanDurationLabel(cellText)) { durRaw = cellText; break; }
+          }
+        }
+
+        const qtyRaw = Number(get(qtyIdx).replace(/[^\d]/g, "") || 0) || 0;
+
         const med = buildMedicineRow({
           medicineName:  medName,
           dose:          get(doseIdx),
-          frequency:     get(freqIdx),
+          frequency:     freqRaw,
           instruction:   get(instrIdx),
-          durationLabel: get(durIdx),
-          qtyFromTable:  Number(get(qtyIdx).replace(/[^\d]/g, "") || 0) || 0,
+          durationLabel: durRaw,
+          qtyFromTable:  qtyRaw,
         });
 
         if (med) medicines.push(med);
@@ -255,12 +332,6 @@ function parseTablesFromDocument(document) {
 
 // ─── Text fallback ────────────────────────────────────────────────────────────
 
-const LAB_LINE_RE     = /\b(hemoglobin|leukocyte|platelet|creatinine|uric[\s-]?acid|investigation|hba1c|hs[\s-]?crp|ecg|echo|ppbs|fbs)\b/i;
-const MED_KEYWORD_RE  = /\b(TABLET|TAB|CAPSULE|CAP|SYRUP|SYP|INJECTION|INJ|CREAM|OINTMENT|DROP|DROPS)\b/i;
-const TEXT_FREQ_RE    = /\b(\d)\s*[-–—|_]\s*(\d)\s*[-–—|_]\s*(\d)\b/;
-const TEXT_DUR_RE     = /\b(\d+)\s*(month|months|day|days|week|weeks)\b/i;
-
-// Stop-pattern for medicine name (dose/freq/food timing)
 const NAME_STOP_RE = /\s+(?:\d+\s*(?:tablet|tab|capsule|cap)|\d\s*[-–—]\s*\d\s*[-–—]\s*\d|after\s+food|before\s+food|\d+\s*(?:month|day|week))/i;
 
 function parsePrescriptionRowsFromText(fullText) {
@@ -272,9 +343,13 @@ function parsePrescriptionRowsFromText(fullText) {
   const medicines = [];
   const seen = new Set();
 
-  // Identify medicine lines
   const medIndices = lines.reduce((acc, line, i) => {
-    if (!LAB_LINE_RE.test(line) && (MED_KEYWORD_RE.test(line) || TEXT_FREQ_RE.test(line))) {
+    // Skip lab lines
+    if (LAB_LINE_RE.test(line)) return acc;
+    // Skip lines that ARE a pure freq pattern — "1-0-1" alone is NOT a medicine
+    if (PURE_FREQ_RE.test(line)) return acc;
+    // Must contain a medicine keyword OR a freq pattern AND contain at least one letter-word
+    if ((MED_KEYWORD_RE.test(line) || FREQ_RE.test(line)) && /[a-zA-Z]{2,}/.test(line)) {
       acc.push(i);
     }
     return acc;
@@ -286,7 +361,6 @@ function parsePrescriptionRowsFromText(fullText) {
       ? medIndices[j + 1]
       : Math.min(start + 6, lines.length);
 
-    // Clip block at any lab/investigation line
     for (let k = start + 1; k < end; k++) {
       if (LAB_LINE_RE.test(lines[k])) { end = k; break; }
     }
@@ -294,43 +368,39 @@ function parsePrescriptionRowsFromText(fullText) {
     const firstLine = lines[start];
     const block     = lines.slice(start, end).join(" ");
 
-    // Extract medicine name
     const stripped  = firstLine.replace(/^\d+[\.\)]\s*/, "");
     const stopMatch = stripped.match(NAME_STOP_RE);
     const medName   = (stopMatch ? stripped.substring(0, stopMatch.index) : stripped).trim();
 
     if (!medName || medName.length < 2) continue;
     if (LAB_LINE_RE.test(medName)) continue;
+    if (PURE_FREQ_RE.test(medName)) continue;
 
     const key = medName.toUpperCase().replace(/\s+/g, "");
     if (seen.has(key)) continue;
     seen.add(key);
 
-    // Extract freq from block
-    const freqM = block.match(TEXT_FREQ_RE);
-    const freqVal = freqM ? `${freqM[1]}-${freqM[2]}-${freqM[3]}` : "";
+    const freqM = block.match(FREQ_RE);
+    const freqRaw = freqM ? `${freqM[1]}-${freqM[2]}-${freqM[3]}` : "";
 
-    // Extract duration from block
-    const durM = block.match(TEXT_DUR_RE);
+    const durM = block.match(DUR_RE);
     let durLabel = "";
-    let durDays  = 0;
     if (durM) {
       const n = parseInt(durM[1], 10);
       const u = durM[2].toLowerCase();
-      if (u.startsWith("month")) { durLabel = `${n} Month(s)`; durDays = n * 30; }
-      else if (u.startsWith("week")) { durLabel = `${n} Week(s)`; durDays = n * 7; }
-      else                           { durLabel = `${n} Day(s)`;  durDays = n;     }
+      if (u.startsWith("month")) durLabel = `${n} Month(s)`;
+      else if (u.startsWith("week")) durLabel = `${n} Week(s)`;
+      else durLabel = `${n} Day(s)`;
     }
 
-    // Qty: number appearing right after a duration token
     const qtyAfterDurM = block.match(/\d+\s*(?:month|months|day|days|week|weeks)\s+(\d{1,4})\b/i);
 
     const med = buildMedicineRow({
       medicineName:  medName,
       dose:          block,
-      frequency:     freqVal || block,
+      frequency:     freqRaw,
       instruction:   block,
-      durationLabel: durLabel || block,
+      durationLabel: durLabel,
       qtyFromTable:  qtyAfterDurM ? Number(qtyAfterDurM[1]) : 0,
     });
 
@@ -350,7 +420,7 @@ async function extractPrescriptionData(imageBuffer, mimeType) {
   }
 
   const processorName = `projects/${PROJECT_ID}/locations/${LOCATION}/processors/${PROCESSOR_ID}`;
-  console.log(`🤖 Document AI processor: ${processorName}`);
+  console.log(`\n🤖 Document AI: ${processorName}`);
 
   const [result] = await client.processDocument({
     name:        processorName,
@@ -369,20 +439,18 @@ async function extractPrescriptionData(imageBuffer, mimeType) {
   );
 
   console.log(`📊 Document AI: ${tableCount} table(s), ${bodyCount} body row(s)`);
-  console.log(`📄 Extracted text (first 400 chars):\n${extractedText.substring(0, 400)}`);
+  console.log(`📄 Full extracted text:\n${extractedText}\n`);
 
-  // Primary: table extraction
   let medicines  = parseTablesFromDocument(doc);
   let usedMethod = "table";
 
-  // Fallback: text block extraction when table gives < 3 medicines
   if (medicines.length < 3) {
-    console.log(`⚠️ Table extraction found only ${medicines.length} medicine(s) — using text fallback`);
+    console.log(`\n⚠️  Table extraction: ${medicines.length} result(s) — switching to text fallback`);
     medicines  = parsePrescriptionRowsFromText(extractedText);
     usedMethod = "text-fallback";
   }
 
-  console.log(`✅ ${medicines.length} medicine(s) extracted via [${usedMethod}]`);
+  console.log(`\n✅ Final: ${medicines.length} medicine(s) via [${usedMethod}]`);
   return { extractedText, medicines };
 }
 
