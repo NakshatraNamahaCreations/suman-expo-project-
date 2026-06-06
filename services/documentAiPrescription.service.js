@@ -4,15 +4,7 @@
  * Google Document AI Form Parser — prescription medicine extractor.
  *
  * PRIMARY:  table cell extraction  (row-locked, zero cross-contamination)
- * FALLBACK: medicine-to-medicine text blocks
- *
- * Fixed issues vs. previous version:
- *  1. apiEndpoint now passed so requests reach us-documentai.googleapis.com
- *  2. buildMedicineRow no longer returns null for missing freq/duration —
- *     rows with partial data are kept (empty string / 0 for missing fields)
- *  3. Table is no longer skipped when header columns are not detected;
- *     positional defaults (col 0 = medicine, 1 = dose, …) are used instead
- *  4. Row-number column (col 0 = "1.", "2."…) shifts ALL column indices by +1
+ * FALLBACK: medicine-to-medicine text blocks (only when table gives 0 results)
  */
 
 const { DocumentProcessorServiceClient } = require("@google-cloud/documentai").v1;
@@ -21,8 +13,6 @@ const LOCATION     = process.env.DOCUMENT_AI_LOCATION || "us";
 const PROJECT_ID   = process.env.DOCUMENT_AI_PROJECT_ID;
 const PROCESSOR_ID = process.env.DOCUMENT_AI_PROCESSOR_ID;
 
-// Must specify the regional endpoint — without it the client contacts the
-// global endpoint which cannot serve US-region processors.
 const client = new DocumentProcessorServiceClient({
   apiEndpoint: `${LOCATION}-documentai.googleapis.com`,
 });
@@ -60,7 +50,7 @@ function findHeaderIndex(headers, names) {
 
 function cleanMedicineName(v = "") {
   return String(v)
-    .replace(/^\d+[\.\)]?\s*/, "")   // strip leading row-number
+    .replace(/^\d+[\.\)]?\s*/, "")
     .replace(/\bRx\b/gi, "")
     .replace(/\s+/g, " ")
     .trim();
@@ -69,7 +59,7 @@ function cleanMedicineName(v = "") {
 function cleanDose(v = "") {
   const m = String(v).match(/(\d+)\s*(tablet|tab|capsule|cap|ml|drop|drops|spoon|unit)/i);
   if (!m) return String(v).trim() || "1 Tablet";
-  const qty  = m[1];
+  const qty   = m[1];
   const lower = m[0].toLowerCase();
   let unit = "Tablet";
   if (lower.includes("cap"))    unit = "Capsule";
@@ -81,6 +71,7 @@ function cleanDose(v = "") {
 }
 
 function cleanFrequency(v = "") {
+  // Normalize spaces, dashes, and letter-O/zero confusion, then extract N-N-N
   const text = String(v)
     .replace(/\s+/g, "")
     .replace(/[–—]/g, "-")
@@ -142,8 +133,8 @@ function calculateQty(dose, frequency, durationDays) {
 // ─── Row builder ──────────────────────────────────────────────────────────────
 
 function buildMedicineRow({ medicineName, dose, frequency, instruction, durationLabel, qtyFromTable }) {
-  const name   = cleanMedicineName(medicineName || "");
-  if (!name) return null;                          // skip truly empty rows only
+  const name = cleanMedicineName(medicineName || "");
+  if (!name) return null;
 
   const doseVal  = cleanDose(dose || "");
   const freqVal  = cleanFrequency(frequency || "");
@@ -151,28 +142,27 @@ function buildMedicineRow({ medicineName, dose, frequency, instruction, duration
   const durLabel = cleanDurationLabel(durationLabel || "");
   const durDays  = getDurationDays(durLabel);
 
-  const calcQty  = calculateQty(doseVal, freqVal, durDays);
-  const finalQty = Number(qtyFromTable || 0) || calcQty || 0;
-
-  console.log(
-    `📋 "${name}" | dose:${doseVal} | freq:${freqVal} | dur:${durLabel}(${durDays}d) | qty:${finalQty}`
-  );
+  const doseCount  = parseDoseCount(doseVal);
+  const calcQty    = calculateQty(doseVal, freqVal, durDays);
+  // Use table Qty column if present, otherwise use calculated value
+  const finalQty   = Number(qtyFromTable || 0) || calcQty || 0;
 
   return {
-    medicineName: name,
+    medicineName:    name,
     name,
-    dose:          doseVal,
-    frequency:     freqVal,
-    freqLabel:     freqVal,
-    instruction:   instrVal,
-    durationLabel: durLabel,
-    durationDays:  durDays,
-    duration:      durDays,
+    dose:            doseVal,
+    frequency:       freqVal,
+    freqLabel:       freqVal,
+    instruction:     instrVal,
+    durationLabel:   durLabel,
+    durationDays:    durDays,
+    duration:        durDays,
     prescriptionQty: finalQty || null,
     calculatedQty:   calcQty  || null,
     quantity:        finalQty || null,
     orderQty:        finalQty || null,
     requiredQty:     finalQty || null,
+    qtyPerDose:      doseCount,
   };
 }
 
@@ -191,29 +181,27 @@ function parseTablesFromDocument(document) {
       );
 
       // Try to find named columns; fall back to positional defaults.
-      // Defaults match the Dr Haroon Rashid prescription column order:
+      // Positional defaults match Dr Haroon Rashid prescription:
       //   col 0 = Brand & Strength, 1 = Dose, 2 = Frequency,
       //   col 3 = Instruction, 4 = Duration, 5 = Qty
-      let nameIdx  = findHeaderIndex(headerTexts, ["brandstrength","brand","medicine","drug","name"]);
+      let nameIdx  = findHeaderIndex(headerTexts, ["brandstrength", "brandstrength", "brand", "medicine", "drug", "name", "brandamp"]);
       let doseIdx  = findHeaderIndex(headerTexts, ["dose"]);
-      let freqIdx  = findHeaderIndex(headerTexts, ["frequency","freq"]);
-      let instrIdx = findHeaderIndex(headerTexts, ["instruction","food","timing"]);
+      let freqIdx  = findHeaderIndex(headerTexts, ["frequency", "freq"]);
+      let instrIdx = findHeaderIndex(headerTexts, ["instruction", "food", "timing"]);
       let durIdx   = findHeaderIndex(headerTexts, ["duration"]);
-      let qtyIdx   = findHeaderIndex(headerTexts, ["qty","quantity"]);
+      let qtyIdx   = findHeaderIndex(headerTexts, ["qty", "quantity"]);
 
-      // ── Detect row-number column BEFORE applying defaults ──────────────────
-      // If col 0 of the first body row is just "1.", "2.", … shift all indices.
+      // Detect row-number column (col 0 = "1.", "2."…) and shift all indices
       const firstBodyRow = (table.bodyRows || [])[0];
       let offset = 0;
       if (firstBodyRow) {
         const col0 = getTextFromLayout(document, firstBodyRow.cells?.[0]?.layout);
         if (/^\d+\.?\s*$/.test(col0.trim())) {
           offset = 1;
-          console.log(`🔢 Row-number column detected — shifting all indices by +1`);
+          console.log("🔢 Row-number column detected — shifting all indices by +1");
         }
       }
 
-      // Apply positional defaults (only for columns that weren't found in headers)
       if (nameIdx  < 0) nameIdx  = 0 + offset;
       if (doseIdx  < 0) doseIdx  = 1 + offset;
       if (freqIdx  < 0) freqIdx  = 2 + offset;
@@ -221,10 +209,7 @@ function parseTablesFromDocument(document) {
       if (durIdx   < 0) durIdx   = 4 + offset;
       if (qtyIdx   < 0) qtyIdx   = 5 + offset;
 
-      // ── Process ALL rows (headerRows + bodyRows) ───────────────────────────
-      // Document AI sometimes misclassifies the first data row as a header row,
-      // which would cause it to be missed. Process both, let isHeaderCell()
-      // skip genuine column-header text.
+      // Process ALL rows (headerRows + bodyRows) to avoid misclassification
       const allCellArrays = [
         ...(table.headerRows || []).map((r) => r.cells || []),
         ...(table.bodyRows   || []).map((r) => r.cells || []),
@@ -239,7 +224,7 @@ function parseTablesFromDocument(document) {
         const rawName = get(nameIdx);
         if (!rawName || rawName.length < 2) continue;
 
-        // Skip actual column-header text (e.g. "Brand & Strength", "Dose", …)
+        // Skip column-header text rows
         if (/^(brand|strength|dose|frequency|freq|instruction|duration|qty|quantity|rx|#|no\.?|s\.?no\.?)$/i.test(rawName.trim())) {
           continue;
         }
@@ -260,7 +245,12 @@ function parseTablesFromDocument(document) {
           qtyFromTable:  Number(get(qtyIdx).replace(/[^\d]/g, "") || 0) || 0,
         });
 
-        if (med) medicines.push(med);
+        if (med) {
+          console.log(
+            `📋 TABLE ROW: "${med.name}" | dose:${med.dose} | freq:${med.frequency} | dur:${med.durationLabel}(${med.durationDays}d) | prescriptionQty:${med.prescriptionQty}`
+          );
+          medicines.push(med);
+        }
       }
     }
   }
@@ -270,11 +260,9 @@ function parseTablesFromDocument(document) {
 
 // ─── Text fallback ────────────────────────────────────────────────────────────
 
-// Stop medicine name here (dose / frequency / food timing)
 const NAME_STOP_RE =
   /\s+(?:\d+\s*(?:tablet|tab|capsule|cap)|\d\s*-\s*\d\s*-\s*\d|after\s+food|before\s+food|\d+\s*(?:month|day|week)|\d{1,2}\/\d{1,2}\/\d{2,4})/i;
 
-// Investigation / lab lines — stop block here
 const LAB_LINE_RE =
   /\b(hemoglobin|leukocyte|platelet|creatinine|uric.acid|investigation|hba1c|hs.?crp|ecg|echo|ppbs|fbs)\b/i;
 
@@ -294,7 +282,6 @@ function parsePrescriptionRowsFromText(fullText = "") {
   const medicines = [];
   const seen = new Set();
 
-  // Find indices of all medicine lines
   const medIndices = lines.reduce((acc, line, i) => {
     if (looksLikeMedicineLine(line)) acc.push(i);
     return acc;
@@ -302,8 +289,6 @@ function parsePrescriptionRowsFromText(fullText = "") {
 
   for (let j = 0; j < medIndices.length; j++) {
     const start = medIndices[j];
-
-    // Block ends at next medicine line OR lab text OR max 8 lines
     let end = j + 1 < medIndices.length
       ? medIndices[j + 1]
       : Math.min(start + 8, lines.length);
@@ -315,7 +300,6 @@ function parsePrescriptionRowsFromText(fullText = "") {
     const firstLine = lines[start];
     const block = lines.slice(start, end).join(" ");
 
-    // Medicine name from the first line only
     const stripped  = firstLine.replace(/^\d+[\.\)]\s*/, "");
     const stopMatch = stripped.match(NAME_STOP_RE);
     const medName   = (stopMatch ? stripped.substring(0, stopMatch.index) : stripped).trim();
@@ -327,7 +311,6 @@ function parsePrescriptionRowsFromText(fullText = "") {
     if (seen.has(key)) continue;
     seen.add(key);
 
-    // Qty: a number that appears right after a duration token
     const qtyAfterDur = block.match(
       /(?:\d+\s*(?:month|months|month\(s\)|day|days|day\(s\)|week|weeks|week\(s\)))\s+(\d{1,4})\b/i
     );
@@ -341,10 +324,33 @@ function parsePrescriptionRowsFromText(fullText = "") {
       qtyFromTable:  qtyAfterDur ? Number(qtyAfterDur[1]) : 0,
     });
 
-    if (med) medicines.push(med);
+    if (med) {
+      console.log(
+        `📋 TEXT FALLBACK ROW: "${med.name}" | freq:${med.frequency} | dur:${med.durationLabel}(${med.durationDays}d) | prescriptionQty:${med.prescriptionQty}`
+      );
+      medicines.push(med);
+    }
   }
 
   return medicines;
+}
+
+// ─── Raw table capture for debug response ─────────────────────────────────────
+
+function captureRawTables(document) {
+  const rawTables = [];
+  for (const page of document.pages || []) {
+    for (const table of page.tables || []) {
+      const headers = (table.headerRows || []).flatMap((row) =>
+        (row.cells || []).map((cell) => getTextFromLayout(document, cell.layout))
+      );
+      const rows = (table.bodyRows || []).map((row) =>
+        (row.cells || []).map((cell) => getTextFromLayout(document, cell.layout))
+      );
+      rawTables.push({ headers, rows });
+    }
+  }
+  return rawTables;
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -357,7 +363,7 @@ async function extractPrescriptionData(imageBuffer, mimeType) {
   }
 
   const processorName = `projects/${PROJECT_ID}/locations/${LOCATION}/processors/${PROCESSOR_ID}`;
-  console.log(`🤖 Document AI: ${processorName}`);
+  console.log(`\n🤖 Document AI processor: ${processorName}`);
 
   const [result] = await client.processDocument({
     name: processorName,
@@ -367,27 +373,40 @@ async function extractPrescriptionData(imageBuffer, mimeType) {
     },
   });
 
-  const doc          = result.document || {};
+  const doc           = result.document || {};
   const extractedText = doc.text || "";
 
   const tableCount = (doc.pages || []).reduce((n, p) => n + (p.tables || []).length, 0);
   const bodyCount  = (doc.pages || []).reduce(
     (n, p) => n + (p.tables || []).reduce((m, t) => m + (t.bodyRows || []).length, 0), 0
   );
-  console.log(`📊 Tables: ${tableCount}  body rows: ${bodyCount}`);
-  console.log(`📄 Text (first 500):\n${extractedText.substring(0, 500)}`);
+  console.log(`📊 Document AI: ${tableCount} table(s), ${bodyCount} body row(s)`);
+  console.log(`📄 Extracted text (first 500 chars):\n${extractedText.substring(0, 500)}`);
 
+  // Capture raw tables for debug response
+  const rawTables = captureRawTables(doc);
+  console.log("\n📊 DOCUMENT AI RAW TABLES:");
+  console.log(JSON.stringify(rawTables, null, 2));
+
+  // Primary: table extraction
   let medicines  = parseTablesFromDocument(doc);
   let usedMethod = "table";
 
-  if (medicines.length < 3) {
-    console.log(`⚠️ Table extraction: ${medicines.length} — using text fallback`);
+  // Fallback: text-based only if table extraction found nothing
+  if (medicines.length === 0) {
+    console.log("⚠️ Table extraction returned 0 medicines — switching to text fallback");
     medicines  = parsePrescriptionRowsFromText(extractedText);
     usedMethod = "text-fallback";
   }
 
-  console.log(`✅ ${medicines.length} medicine(s) via [${usedMethod}]`);
-  return { extractedText, medicines };
+  console.log(`\n💊 DOCUMENT AI EXTRACTED MEDICINES (${medicines.length} via [${usedMethod}]):`);
+  medicines.forEach((m, i) => {
+    console.log(`  [${i + 1}] medicineName: "${m.medicineName}"`);
+    console.log(`       dose: ${m.dose} | frequency: ${m.frequency} | durationLabel: ${m.durationLabel} | durationDays: ${m.durationDays}`);
+    console.log(`       prescriptionQty: ${m.prescriptionQty} | calculatedQty: ${m.calculatedQty}`);
+  });
+
+  return { extractedText, medicines, rawTables };
 }
 
 module.exports = { extractPrescriptionData };

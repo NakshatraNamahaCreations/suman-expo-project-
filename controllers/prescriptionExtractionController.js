@@ -1,12 +1,12 @@
 "use strict";
 
-const axios               = require("axios");
-const Medicine            = require("../models/Medicine");
+const axios      = require("axios");
+const Medicine   = require("../models/Medicine");
 const UserPrescriptionFile = require("../models/UserPrescriptionFile");
 const { deleteFromCloudinary } = require("../config/cloudinary");
 const { extractPrescriptionData } = require("../services/documentAiPrescription.service");
 
-// ─── Name normaliser (strips type prefix for matching only) ──────────────────
+// ─── Name normaliser (strips dosage-form prefix for matching only) ─────────────
 
 function normalizeMedicineName(text = "") {
   return String(text)
@@ -20,7 +20,7 @@ function normalizeMedicineName(text = "") {
     .trim();
 }
 
-// ─── Fuzzy match score 0-100 ─────────────────────────────────────────────────
+// ─── Fuzzy match score 0–100 ──────────────────────────────────────────────────
 
 const MIN_MATCH_SCORE = 75;
 
@@ -36,13 +36,12 @@ function getMedicineMatchScore(ocrName = "", dbName = "") {
 
   if (!ocrTokens.length || !dbTokens.length) return 0;
 
-  // First tokens must match (primary word)
+  // First significant token must match
   if (ocrTokens[0] !== dbTokens[0]) {
-    // Substring check as fallback
     if (!ocr.includes(dbTokens[0]) && !db.includes(ocrTokens[0])) return 0;
   }
 
-  // Token overlap
+  // Token overlap score
   let common = 0;
   for (const t of ocrTokens) {
     if (dbTokens.includes(t)) common++;
@@ -82,55 +81,56 @@ async function matchMedicinesWithDatabase(ocrMedicines) {
         const durationDays = ocrMed.durationDays || 0;
 
         matched.push({
+          // ── DB identity ──
           _id:        bestMatch._id.toString(),
           medicineId: bestMatch._id.toString(),
 
+          // ── DB medicine info ──
           description: bestMatch.description,
           name:        bestMatch.description,
 
           mfr:    bestMatch.mfr    || "N/A",
           vendor: bestMatch.vendor || "N/A",
           pack:   bestMatch.pack   || "N/A",
+          batchNo: bestMatch.batchNo || "",
+          hsnCode: bestMatch.hsnCode || "",
 
-          price:   bestMatch.newMrp || bestMatch.mrp || 0,
-          mrp:     bestMatch.newMrp || bestMatch.mrp || 0,
-          newMrp:  bestMatch.newMrp || 0,
-
+          // ── Pricing ──
+          price:        bestMatch.newMrp || 0,
+          mrp:          bestMatch.newMrp || 0,
+          newMrp:       bestMatch.newMrp || 0,
           netValue:     bestMatch.netValue     || 0,
           taxableValue: bestMatch.taxableValue || 0,
+          gstPercent:   bestMatch.gstPercent   || 5,
 
-          qty:      bestMatch.qty || 0,
-          stock:    bestMatch.qty || 0,
-          inStock:  (bestMatch.qty || 0) > 0,
-          availableQuantity: bestMatch.qty || 0,
+          // ── DB stock (NEVER confuse with prescription qty) ──
+          qty:               bestMatch.qty || 0,   // DB stock
+          stock:             bestMatch.qty || 0,   // DB stock
+          availableQuantity: bestMatch.qty || 0,   // DB stock
+          inStock:           (bestMatch.qty || 0) > 0,
 
-          gstPercent: bestMatch.gstPercent || 5,
-          hsnCode:    bestMatch.hsnCode    || "",
-          batchNo:    bestMatch.batchNo    || "",
-
-          // ── From OCR / Document AI ──
-          dose:          ocrMed.dose      || "",
-          frequency:     ocrMed.frequency || "",
-          freqLabel:     ocrMed.frequency || ocrMed.freqLabel || "",
+          // ── OCR prescription data ──
+          dose:          ocrMed.dose          || "",
+          frequency:     ocrMed.frequency     || "",
+          freqLabel:     ocrMed.frequency     || ocrMed.freqLabel || "",
           instruction:   ocrMed.instruction   || "",
           durationLabel: ocrMed.durationLabel || "",
           durationDays,
           duration:      durationDays,
+          qtyPerDose:    ocrMed.qtyPerDose    || 1,
 
-          // ── Prescription quantities (never DB stock) ──
+          // ── Prescription order quantities (NEVER DB stock) ──
           prescriptionQty: ocrMed.prescriptionQty || null,
           calculatedQty:   ocrMed.calculatedQty   || null,
-          quantity:        ocrMed.quantity   || ocrMed.prescriptionQty || ocrMed.calculatedQty || null,
-          orderQty:        ocrMed.orderQty   || ocrMed.prescriptionQty || ocrMed.calculatedQty || null,
-          requiredQty:     ocrMed.requiredQty || ocrMed.prescriptionQty || ocrMed.calculatedQty || null,
+          quantity:        ocrMed.quantity         || ocrMed.prescriptionQty || ocrMed.calculatedQty || null,
+          orderQty:        ocrMed.orderQty         || ocrMed.prescriptionQty || ocrMed.calculatedQty || null,
+          requiredQty:     ocrMed.requiredQty      || ocrMed.prescriptionQty || ocrMed.calculatedQty || null,
 
           ocrMedicineName: ocrName,
           matchScore:      bestScore,
-
-          rawOcrMedicine: ocrMed,
         });
       } else {
-        console.log(`⚠️ No match: "${ocrName}" (best score ${bestScore})`);
+        console.log(`⚠️ No DB match: "${ocrName}" (best score ${bestScore})`);
       }
     }
   } catch (err) {
@@ -143,13 +143,12 @@ async function matchMedicinesWithDatabase(ocrMedicines) {
 // ─── Main handler ─────────────────────────────────────────────────────────────
 
 exports.extractMedicinesFromPrescription = async (req, res) => {
-  // req.file is populated by multer-storage-cloudinary (file already in Cloudinary)
   const cloudinaryUrl      = req.file?.path;
   const cloudinaryPublicId = req.file?.filename;
-  const mimeType           = req.file?.mimetype || "image/jpeg";
+  const mimeType           = req.file?.mimetype     || "image/jpeg";
   const fileName           = req.file?.originalname || "prescription";
-  const fileSize           = req.file?.size || 0;
-  const userId             = req.body?.userId    || req.query?.userId    || null;
+  const fileSize           = req.file?.size         || 0;
+  const userId             = req.body?.userId   || req.query?.userId   || null;
   const patientId          = req.body?.patientId || req.query?.patientId || null;
 
   if (!cloudinaryUrl) {
@@ -167,40 +166,42 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
     console.log(`✅ Downloaded ${imageBuffer.length} bytes from Cloudinary`);
   } catch (dlErr) {
     console.error("❌ Cloudinary download error:", dlErr.message);
-    try { await deleteFromCloudinary(cloudinaryPublicId, "auto"); } catch {}
+    try { await deleteFromCloudinary(cloudinaryPublicId, "auto"); } catch { }
     return res.status(400).json({
       success: false,
       message: "Could not retrieve uploaded file. Please try again.",
     });
   }
 
-  // ── 2. Document AI extraction ────────────────────────────────────────────────
+  // ── 2. Document AI extraction ─────────────────────────────────────────────
   let extractedText      = "";
   let extractedMedicines = [];
+  let rawTables          = [];
 
   try {
     const docAiResult  = await extractPrescriptionData(imageBuffer, mimeType);
     extractedText      = docAiResult.extractedText;
-    extractedMedicines = docAiResult.medicines || [];
+    extractedMedicines = docAiResult.medicines  || [];
+    rawTables          = docAiResult.rawTables  || [];
   } catch (docAiErr) {
     console.error("❌ Document AI error:", docAiErr.message);
-    try { await deleteFromCloudinary(cloudinaryPublicId, "auto"); } catch {}
+    try { await deleteFromCloudinary(cloudinaryPublicId, "auto"); } catch { }
     return res.status(400).json({
       success: false,
       message: "Could not read the prescription. Please upload a clear, well-lit image or PDF.",
     });
   }
 
-  console.log(`✅ Document AI: ${extractedText.length} chars, ${extractedMedicines.length} medicines`);
-  console.log("💊 OCR medicines:", JSON.stringify(extractedMedicines, null, 2));
+  console.log(`\n✅ Document AI done: ${extractedText.length} chars, ${extractedMedicines.length} medicine(s)`);
 
-  // ── 3. Handle empty text ─────────────────────────────────────────────────────
+  // ── 3. Handle empty text ──────────────────────────────────────────────────
   if (!extractedText || extractedText.trim().length === 0) {
     await maybeSaveFile({ userId, patientId, cloudinaryUrl, cloudinaryPublicId, mimeType, fileName, fileSize });
     return res.json({
       success: true,
       message: "No text found in image",
       extractedText: "",
+      rawTables,
       extractedMedicines: [],
       matchedMedicines: [],
       medicines: [],
@@ -210,13 +211,14 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
     });
   }
 
-  // ── 4. Handle no medicines ───────────────────────────────────────────────────
+  // ── 4. Handle no medicines ────────────────────────────────────────────────
   if (extractedMedicines.length === 0) {
     await maybeSaveFile({ userId, patientId, cloudinaryUrl, cloudinaryPublicId, mimeType, fileName, fileSize });
     return res.json({
       success: true,
       message: "No medicines found in prescription",
       extractedText,
+      rawTables,
       extractedMedicines: [],
       matchedMedicines: [],
       medicines: [],
@@ -226,13 +228,23 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
     });
   }
 
-  // ── 5. Match with database ───────────────────────────────────────────────────
-  console.log("🔗 Matching medicines with database…");
+  // ── 5. Match with database ────────────────────────────────────────────────
+  console.log("\n🔗 Matching extracted medicines with MongoDB...");
   const matchedMedicines = await matchMedicinesWithDatabase(extractedMedicines);
-  console.log(`✅ Matched ${matchedMedicines.length} / ${extractedMedicines.length} medicines`);
-  console.log("💊 Matched:", JSON.stringify(matchedMedicines, null, 2));
 
-  // ── 6. Save to user's prescription library ───────────────────────────────────
+  console.log(`\n✅ FINAL MATCHED MEDICINES (${matchedMedicines.length} / ${extractedMedicines.length}):`);
+  matchedMedicines.forEach((m, i) => {
+    console.log(`  [${i + 1}] medicine name  : "${m.description}"`);
+    console.log(`       ocrName       : "${m.ocrMedicineName}"`);
+    console.log(`       frequency     : ${m.frequency}`);
+    console.log(`       durationLabel : ${m.durationLabel}`);
+    console.log(`       durationDays  : ${m.durationDays}`);
+    console.log(`       prescriptionQty: ${m.prescriptionQty}`);
+    console.log(`       DB stock (qty) : ${m.qty}`);
+    console.log(`       matchScore    : ${m.matchScore}`);
+  });
+
+  // ── 6. Save to user's prescription library ────────────────────────────────
   const savedFile = await maybeSaveFile({
     userId, patientId, cloudinaryUrl, cloudinaryPublicId, mimeType, fileName, fileSize,
   });
@@ -243,6 +255,7 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
       ? `Found ${matchedMedicines.length} medicine(s)`
       : "No matching medicines found in our database",
     extractedText,
+    rawTables,
     extractedMedicines,
     matchedMedicines,
     medicines: matchedMedicines,
@@ -262,7 +275,7 @@ exports.extractMedicinesFromPrescription = async (req, res) => {
   });
 };
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Helper ───────────────────────────────────────────────────────────────────
 
 async function maybeSaveFile({ userId, patientId, cloudinaryUrl, cloudinaryPublicId, mimeType, fileName, fileSize }) {
   if (!userId) return null;
@@ -270,9 +283,9 @@ async function maybeSaveFile({ userId, patientId, cloudinaryUrl, cloudinaryPubli
     const fileType = mimeType?.includes("pdf") ? "pdf" : "image";
     return await UserPrescriptionFile.create({
       userId,
-      patientId:        patientId || null,
+      patientId: patientId || null,
       cloudinaryUrl,
-      publicId:         cloudinaryPublicId,
+      publicId: cloudinaryPublicId,
       fileType,
       mimeType,
       originalFileName: fileName,
