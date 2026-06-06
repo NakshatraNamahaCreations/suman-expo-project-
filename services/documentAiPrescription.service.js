@@ -220,7 +220,7 @@ function parseTablesFromDocument(document) {
 
       console.log(`\n📊 Table headers: [${headerTexts.join(" | ")}]`);
 
-      // Named column detection (with positional fallback)
+      // ── Step 1: find column indices from header text ─────────────────────
       let nameIdx  = findHeaderIndex(headerTexts, ["brandstrength","brand","medicine","drug","name","rx"]);
       let doseIdx  = findHeaderIndex(headerTexts, ["dose"]);
       let freqIdx  = findHeaderIndex(headerTexts, ["frequency","freq"]);
@@ -228,17 +228,43 @@ function parseTablesFromDocument(document) {
       let durIdx   = findHeaderIndex(headerTexts, ["duration","period"]);
       let qtyIdx   = findHeaderIndex(headerTexts, ["qty","quantity"]);
 
-      // Detect row-number column from first body row
+      console.log(`   Named cols found → name:${nameIdx} dose:${doseIdx} freq:${freqIdx} instr:${instrIdx} dur:${durIdx} qty:${qtyIdx}`);
+
+      // ── Step 2: detect row-number column offset ───────────────────────────
+      // The header row may NOT include the row-number column (e.g. headers are
+      // ["Brand & Strength","Dose","Frequency","Instruction","Duration","Qty"]
+      // — 6 cells) but every data row starts with "1.", "2.", … — 7 cells.
+      // In that case the named indices are off by 1 for the data rows and MUST
+      // be shifted.  We compare header column count with data column count.
       const firstBodyRow = (table.bodyRows || [])[0];
       let offset = 0;
       if (firstBodyRow) {
         const col0 = getTextFromLayout(document, firstBodyRow.cells?.[0]?.layout);
         if (/^\d+\.?\s*$/.test(col0.trim())) {
-          offset = 1;
-          console.log("🔢 Row-number column detected (col 0 = row numbers) — shifting indices +1");
+          const headerCols = headerTexts.length;
+          const dataCols   = (firstBodyRow.cells || []).length;
+          // Only apply offset when header row is shorter than data row
+          // (i.e. header doesn't have the row-number column)
+          if (dataCols > headerCols || headerCols === 0) {
+            offset = 1;
+            console.log(`🔢 Row-number offset=1 (header cols:${headerCols}, data cols:${dataCols})`);
+          }
         }
       }
 
+      // ── Step 3: apply offset to ALL found indices ─────────────────────────
+      // Whether a column was found by name OR will use a positional default,
+      // we must shift by offset because data rows have an extra row-number cell.
+      if (offset > 0) {
+        if (nameIdx  >= 0) nameIdx  += offset;
+        if (doseIdx  >= 0) doseIdx  += offset;
+        if (freqIdx  >= 0) freqIdx  += offset;
+        if (instrIdx >= 0) instrIdx += offset;
+        if (durIdx   >= 0) durIdx   += offset;
+        if (qtyIdx   >= 0) qtyIdx   += offset;
+      }
+
+      // ── Step 4: positional defaults for columns not found in headers ──────
       if (nameIdx  < 0) nameIdx  = 0 + offset;
       if (doseIdx  < 0) doseIdx  = 1 + offset;
       if (freqIdx  < 0) freqIdx  = 2 + offset;
@@ -246,7 +272,7 @@ function parseTablesFromDocument(document) {
       if (durIdx   < 0) durIdx   = 4 + offset;
       if (qtyIdx   < 0) qtyIdx   = 5 + offset;
 
-      console.log(`   Column map → name:${nameIdx} dose:${doseIdx} freq:${freqIdx} instr:${instrIdx} dur:${durIdx} qty:${qtyIdx}`);
+      console.log(`   Final col map → name:${nameIdx} dose:${doseIdx} freq:${freqIdx} instr:${instrIdx} dur:${durIdx} qty:${qtyIdx}`);
 
       // Process headerRows + bodyRows together (Document AI sometimes puts first data row in headerRows)
       const allRows = [
