@@ -3,13 +3,13 @@
 /**
  * Document AI Form Parser service for prescription table extraction.
  *
- * Primary path  → reads detected table cells (exact column mapping, zero cross-contamination)
- * Fallback path → medicine-to-medicine text blocks (no fixed-width window)
+ * Primary path  → table cell extraction (exact per-row column mapping)
+ * Fallback path → medicine-to-medicine text blocks
  *
- * Key rules:
- *  • Medicine name is the FULL text from the Brand/Strength column — never truncated to "TABLET".
- *  • Frequency / Duration / Qty come from that medicine's own table row only.
- *  • qty = Qty column value   OR   doseCount × freqPerDay × durationDays
+ * Key field rules:
+ *  • Medicine name  = full text from Brand/Strength column (includes "TABLET" prefix)
+ *  • freq / duration / qty = from that medicine's OWN row/block only
+ *  • prescriptionQty = Qty column OR doseCount × freqPerDay × durationDays
  */
 
 const { DocumentProcessorServiceClient } = require("@google-cloud/documentai").v1;
@@ -22,7 +22,7 @@ const docAiClient = new DocumentProcessorServiceClient({
   apiEndpoint: `${LOCATION}-documentai.googleapis.com`,
 });
 
-// ─── Cell text helper ─────────────────────────────────────────────────────────
+// ─── Cell text ────────────────────────────────────────────────────────────────
 
 function getCellText(docText, cell) {
   if (!cell?.layout?.textAnchor?.textSegments?.length) return "";
@@ -35,28 +35,23 @@ function getCellText(docText, cell) {
     .trim();
 }
 
-// ─── Column identifier ────────────────────────────────────────────────────────
+// ─── Column identification ────────────────────────────────────────────────────
 
-/**
- * Map column header text → column index.
- * Falls back to positional defaults when no header is found.
- */
 function identifyColumns(headerTexts) {
-  // Positional defaults that match the Dr Haroon Rashid prescription layout:
-  //   col 0 = (row#) Brand & Strength   col 1 = Dose   col 2 = Frequency
-  //   col 3 = Instruction               col 4 = Duration   col 5 = Qty
+  // Positional defaults for the Dr Haroon Rashid prescription layout:
+  //   col 0 = Brand & Strength (with optional row number)
+  //   col 1 = Dose   col 2 = Frequency   col 3 = Instruction
+  //   col 4 = Duration   col 5 = Qty
   const cols = { name: 0, dose: 1, frequency: 2, instruction: 3, duration: 4, qty: 5 };
-
   headerTexts.forEach((text, i) => {
     const t = text.toLowerCase().trim();
-    if (/brand|strength|medicine|name/i.test(t))  cols.name        = i;
-    else if (/^dose/i.test(t))                     cols.dose        = i;
+    if (/brand|strength|medicine|drug/i.test(t))  cols.name        = i;
+    else if (/^dose|strength.*dose/i.test(t))      cols.dose        = i;
     else if (/freq/i.test(t))                      cols.frequency   = i;
-    else if (/instruct/i.test(t))                  cols.instruction = i;
+    else if (/instruct|timing/i.test(t))           cols.instruction = i;
     else if (/duration/i.test(t))                  cols.duration    = i;
     else if (/qty|quantity/i.test(t))              cols.qty         = i;
   });
-
   return cols;
 }
 
@@ -68,10 +63,7 @@ function parseDoseCount(raw) {
 }
 
 function parseFreqPerDay(raw) {
-  // Accept "1-0-1", "1 - 0 - 1", "1–0–1" etc.
-  const clean = String(raw)
-    .replace(/\s+/g, "")
-    .replace(/[–—|_]/g, "-");
+  const clean = String(raw).replace(/\s+/g, "").replace(/[–—|_]/g, "-");
   const m = clean.match(/(\d)-(\d)-(\d)/);
   if (!m) return 0;
   return parseInt(m[1]) + parseInt(m[2]) + parseInt(m[3]);
@@ -101,9 +93,7 @@ function cleanDurationLabel(raw) {
 }
 
 function cleanFrequency(raw) {
-  const clean = String(raw)
-    .replace(/\s+/g, "")
-    .replace(/[–—|_]/g, "-");
+  const clean = String(raw).replace(/\s+/g, "").replace(/[–—|_]/g, "-");
   const m = clean.match(/\d-\d-\d/);
   return m ? m[0] : "";
 }
@@ -122,7 +112,8 @@ function cleanInstruction(raw) {
   if (s.includes("after meal"))  return "After Food";
   if (s.includes("before meal")) return "Before Food";
   if (s.includes("with food"))   return "With Food";
-  return raw.trim();
+  if (s.includes("empty stomach")) return "Empty Stomach";
+  return "";
 }
 
 function calculateQty(dose, frequency, durationDays) {
@@ -154,84 +145,111 @@ function buildMedicineRow({ medicineName, dose, frequency, instruction, duration
   };
 }
 
-// ─── Header / non-medicine cell detector ─────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const HEADER_PATTERN = /^(brand|strength|dose|frequency|freq|instruction|duration|qty|quantity|rx|#|no\.?|s\.?no\.?)$/i;
+// Text that signals a column header cell, NOT a medicine
+const HEADER_CELL_RE =
+  /^(brand|strength|dose|frequency|freq|instruction|timing|duration|qty|quantity|rx|#|no\.?|s\.?no\.?|sl\.?\s*no\.?)$/i;
 
 function isHeaderCell(text) {
-  return HEADER_PATTERN.test(text.trim());
+  return HEADER_CELL_RE.test(text.trim());
 }
 
-// ─── Medicine line detector (for text fallback) ───────────────────────────────
+// Investigation / lab-report keywords that should STOP name extraction
+const INVESTIGATION_RE =
+  /\b(hemoglobin|leukocytes|platelet|creatinine|uric.acid|cholesterol|glucose|hba1c|hs.?crp|ecg|echo|ppbs|hbaic|fbs|tlc|dlc)\b/i;
 
 function looksLikeMedicineLine(text) {
-  // Explicit type keyword (most prescriptions)
-  if (/\b(TABLET|TAB|CAPSULE|CAP|SYRUP|INJECTION|INJ|CREAM|OINTMENT|DROP|DROPS)\b/i.test(text)) return true;
-  // Numbered list entry that also has a frequency pattern — catches any medicine format
+  if (INVESTIGATION_RE.test(text)) return false;
+  if (/\b(TABLET|TAB|CAPSULE|CAP|SYRUP|SYP|INJECTION|INJ|CREAM|OINTMENT|DROP|DROPS)\b/i.test(text)) return true;
+  // Numbered list entry + frequency pattern (catches any medicine without explicit type)
   if (/^\d+[\.\)]\s+[A-Z]{2}/.test(text.trim()) && /\d\s*-\s*\d\s*-\s*\d/.test(text)) return true;
   return false;
 }
 
-// ─── Table-based extraction (primary) ─────────────────────────────────────────
+// ─── Table-based extraction (primary) ────────────────────────────────────────
+
+function processRow(docText, cells, cols) {
+  const cellAt = (idx) =>
+    idx >= 0 && idx < cells.length ? getCellText(docText, cells[idx]) : "";
+
+  const rawName = cellAt(cols.name);
+  if (!rawName || rawName.length < 2) return null;
+  if (isHeaderCell(rawName)) return null;
+
+  // Strip leading row number (e.g. "1. " or "1) ")
+  const medicineName = rawName.replace(/^\d+[\.\)]\s*/, "").trim();
+  if (medicineName.length < 2) return null;
+
+  const doseRaw       = cellAt(cols.dose);
+  const freqRaw       = cellAt(cols.frequency);
+  const instrRaw      = cellAt(cols.instruction);
+  const durRaw        = cellAt(cols.duration);
+  const qtyRaw        = cellAt(cols.qty);
+
+  const dose          = cleanDose(doseRaw) || doseRaw.trim() || "1 Tablet";
+  const frequency     = cleanFrequency(freqRaw) || freqRaw.replace(/\s+/g, "").trim();
+  const instruction   = cleanInstruction(instrRaw);
+  const durationLabel = cleanDurationLabel(durRaw) || durRaw.trim();
+  const durationDays  = getDurationDays(durationLabel);
+  const qtyFromTable  = parseInt(qtyRaw.replace(/[^\d]/g, ""), 10) || null;
+
+  console.log(
+    `📋 [Table] "${medicineName}" | dose:${dose} | freq:${frequency} | ` +
+    `dur:${durationLabel}(${durationDays}d) | qty:${qtyFromTable}`
+  );
+
+  return buildMedicineRow({ medicineName, dose, frequency, instruction, durationLabel, durationDays, qtyFromTable });
+}
 
 function extractFromTables(document) {
-  const docText = document.text || "";
+  const docText  = document.text || "";
   const medicines = [];
-  const seen = new Set();
+  const seen     = new Set();
 
   for (const page of document.pages || []) {
     for (const table of page.tables || []) {
+      // ── Step 1: identify columns from header rows ─────────────────────────
       const headerTexts = (table.headerRows || []).flatMap((row) =>
         (row.cells || []).map((cell) => getCellText(docText, cell))
       );
-      const cols = identifyColumns(headerTexts);
+      let cols = identifyColumns(headerTexts);
 
-      for (const bodyRow of table.bodyRows || []) {
-        const cells  = bodyRow.cells || [];
-        const cellAt = (idx) =>
-          idx >= 0 && idx < cells.length ? getCellText(docText, cells[idx]) : "";
-
-        // Get the medicine name cell.
-        // If col 0 is just a row number (e.g. "1."), the real name is in col 1.
-        let rawName = cellAt(cols.name);
-        if (/^\d+\.?\s*$/.test(rawName.trim())) {
-          rawName = cellAt(cols.name + 1) || rawName;
+      // ── Step 2: detect row-number column (offset ALL indices if col 0 = "1.", "2."…)
+      // Check the first available body row (or header row if no body rows).
+      const firstBodyRow = (table.bodyRows || [])[0];
+      if (firstBodyRow && cols.name === 0) {
+        const col0 = getCellText(docText, firstBodyRow.cells?.[0]);
+        if (/^\d+\.?\s*$/.test(col0.trim())) {
+          // col 0 is just a row number → shift every index right by 1
+          cols = {
+            name:        cols.name        + 1,
+            dose:        cols.dose        + 1,
+            frequency:   cols.frequency   + 1,
+            instruction: cols.instruction + 1,
+            duration:    cols.duration    + 1,
+            qty:         cols.qty         + 1,
+          };
+          console.log(`🔢 Detected row-number column — shifted all col indices by +1`);
         }
+      }
 
-        if (!rawName || rawName.length < 2) continue;
+      // ── Step 3: process ALL rows (header + body)
+      //    Document AI sometimes puts the first data row into headerRows.
+      //    We process both; isHeaderCell() will skip genuine header cells.
+      const allRows = [
+        ...(table.headerRows || []).flatMap((r) => [r.cells || []]),
+        ...(table.bodyRows   || []).flatMap((r) => [r.cells || []]),
+      ];
 
-        // Skip cells that look like column headers (in case Document AI includes
-        // the header row inside bodyRows)
-        if (isHeaderCell(rawName)) continue;
+      for (const cells of allRows) {
+        const med = processRow(docText, cells, cols);
+        if (!med) continue;
 
-        // Full medicine name — strip leading row number only
-        const medicineName = rawName.replace(/^\d+[\.\)]\s*/, "").trim();
-        if (medicineName.length < 2) continue;
-
-        const key = medicineName.toUpperCase().replace(/\s+/g, "");
+        const key = med.medicineName.toUpperCase().replace(/\s+/g, "");
         if (seen.has(key)) continue;
         seen.add(key);
-
-        const doseRaw       = cellAt(cols.dose);
-        const freqRaw       = cellAt(cols.frequency);
-        const instrRaw      = cellAt(cols.instruction);
-        const durRaw        = cellAt(cols.duration);
-        const qtyRaw        = cellAt(cols.qty);
-
-        const dose          = cleanDose(doseRaw) || doseRaw.trim() || "1 Tablet";
-        const frequency     = cleanFrequency(freqRaw) || freqRaw.replace(/\s+/g, "").trim();
-        const instruction   = cleanInstruction(instrRaw);
-        const durationLabel = cleanDurationLabel(durRaw) || durRaw.trim();
-        const durationDays  = getDurationDays(durationLabel);
-        const qtyFromTable  = parseInt(qtyRaw.replace(/[^\d]/g, ""), 10) || null;
-
-        console.log(
-          `📋 [Table] "${medicineName}" | dose:${dose} | freq:${frequency} | dur:${durationLabel}(${durationDays}d) | qty:${qtyFromTable}`
-        );
-
-        medicines.push(buildMedicineRow({
-          medicineName, dose, frequency, instruction, durationLabel, durationDays, qtyFromTable,
-        }));
+        medicines.push(med);
       }
     }
   }
@@ -239,46 +257,59 @@ function extractFromTables(document) {
   return medicines;
 }
 
-// ─── Text-based fallback (medicine-to-medicine blocks) ────────────────────────
+// ─── Text-based fallback (medicine-to-medicine blocks) ───────────────────────
 
-/**
- * For each medicine line, collect ALL lines up to the NEXT medicine line.
- * This means each medicine's block contains only its own data regardless of
- * how many OCR lines span one prescription row.
- */
+// Stop extraction of medicine name at these patterns
+const NAME_STOP_RE =
+  /\s+(?:\d+\s*(?:tablet|tab|capsule|cap)|\d\s*-\s*\d\s*-\s*\d|after\s+food|before\s+food|empty\s+stomach|\d+\s*(?:month|day|week)|\d{1,2}\/\d{1,2}\/\d{2,4}|[-\s]+\d{2,}[.,]\d{2,})/i;
+
+// Lines that are investigation results / lab values — stop the block here
+const INVESTIGATION_LINE_RE =
+  /\b(hemoglobin|leukocytes|platelet|creatinine|uric.acid|investigation|result|hba1c|hs.?crp|ecg|echo)\b/i;
+
 function extractFromText(docText) {
-  const lines = docText.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  const rawLines = docText.split(/\n+/).map((l) => l.trim()).filter(Boolean);
   const medicines = [];
   const seen = new Set();
 
-  // Step 1: find index of every medicine line
-  const medLineIndices = lines.reduce((acc, line, i) => {
+  // Find indices of every medicine line
+  const medIndices = rawLines.reduce((acc, line, i) => {
     if (looksLikeMedicineLine(line)) acc.push(i);
     return acc;
   }, []);
 
-  // Step 2: for each medicine, its data block = from its line to the line before the next medicine
-  for (let j = 0; j < medLineIndices.length; j++) {
-    const startIdx = medLineIndices[j];
-    const endIdx   = j + 1 < medLineIndices.length
-      ? medLineIndices[j + 1]       // stop at next medicine
-      : Math.min(startIdx + 6, lines.length); // or max 6 lines for the last one
+  if (medIndices.length === 0) return medicines;
 
-    const currentLine = lines[startIdx];
-    // Build block from this medicine's lines ONLY
-    const block = lines.slice(startIdx, endIdx).join(" ");
+  for (let j = 0; j < medIndices.length; j++) {
+    const startIdx = medIndices[j];
 
-    // Extract medicine name from the first line, stopping before any column data
+    // Block ends at the next medicine line OR at an investigation/lab line
+    let endIdx = j + 1 < medIndices.length
+      ? medIndices[j + 1]
+      : Math.min(startIdx + 8, rawLines.length);
+
+    // Clip block if we hit investigation text
+    for (let k = startIdx + 1; k < endIdx; k++) {
+      if (INVESTIGATION_LINE_RE.test(rawLines[k])) {
+        endIdx = k;
+        break;
+      }
+    }
+
+    const currentLine = rawLines[startIdx];
+    const block = rawLines.slice(startIdx, endIdx).join(" ");
+
+    // Extract medicine name from the first line only
     const stripped  = currentLine.replace(/^\d+[\.\)]\s*/, "");
-    const stopMatch = stripped.match(
-      /\s+(?:\d+\s*(?:tablet|tab|capsule|cap)|\d\s*-\s*\d\s*-\s*\d|after\s+food|before\s+food|\d+\s*(?:month|day|week)|\d{1,2}\/\d{1,2}\/\d{2,4}|[\s-]+\d{2,}[.,]\d{2,})/i
-    );
+    const stopMatch = stripped.match(NAME_STOP_RE);
     const medicineName = (stopMatch
       ? stripped.substring(0, stopMatch.index)
       : stripped
     ).trim();
 
     if (!medicineName || medicineName.length < 2) continue;
+    if (INVESTIGATION_RE.test(medicineName)) continue;
+
     const key = medicineName.toUpperCase().replace(/\s+/g, "");
     if (seen.has(key)) continue;
     seen.add(key);
@@ -289,14 +320,15 @@ function extractFromText(docText) {
     const durationLabel = cleanDurationLabel(block);
     const durationDays  = getDurationDays(durationLabel);
 
-    // Prefer "6 Month(s) 180" pattern (Qty immediately after duration on same line)
+    // Qty: a standalone number (2-4 digits) that comes right after a duration
     const qtySuffix = block.match(
       /(?:\d+\s*(?:month|months|month\(s\)|day|days|day\(s\)|week|weeks|week\(s\)))\s+(\d{1,4})\b/i
     );
     const qtyFromTable = qtySuffix ? parseInt(qtySuffix[1], 10) : null;
 
     console.log(
-      `📋 [Text] "${medicineName}" | dose:${dose} | freq:${frequency} | dur:${durationLabel}(${durationDays}d) | qty:${qtyFromTable}`
+      `📋 [Text] "${medicineName}" | dose:${dose} | freq:${frequency} | ` +
+      `dur:${durationLabel}(${durationDays}d) | qty:${qtyFromTable}`
     );
 
     medicines.push(buildMedicineRow({
@@ -311,7 +343,7 @@ function extractFromText(docText) {
 
 /**
  * @param {Buffer} imageBuffer
- * @param {string} mimeType  e.g. "image/jpeg" | "application/pdf"
+ * @param {string} mimeType  "image/jpeg" | "image/png" | "application/pdf"
  * @returns {{ extractedText: string, medicines: Array }}
  */
 async function extractPrescriptionData(imageBuffer, mimeType) {
@@ -322,7 +354,7 @@ async function extractPrescriptionData(imageBuffer, mimeType) {
   }
 
   const processorName = `projects/${PROJECT_ID}/locations/${LOCATION}/processors/${PROCESSOR_ID}`;
-  console.log(`🤖 Document AI processor: ${processorName}`);
+  console.log(`🤖 Document AI: ${processorName}`);
 
   const [response] = await docAiClient.processDocument({
     name: processorName,
@@ -332,34 +364,34 @@ async function extractPrescriptionData(imageBuffer, mimeType) {
     },
   });
 
-  const document = response.document;
-  if (!document) throw new Error("Document AI returned no document");
+  const doc = response.document;
+  if (!doc) throw new Error("Document AI returned no document");
 
-  const extractedText = document.text || "";
+  const extractedText = doc.text || "";
 
-  // Count detected tables + log first 800 chars of raw text for diagnostics
-  const tableCount = (document.pages || []).reduce(
-    (n, p) => n + (p.tables || []).length, 0
+  const tableCount = (doc.pages || []).reduce((n, p) => n + (p.tables || []).length, 0);
+  const headerRowCount = (doc.pages || []).reduce(
+    (n, p) => n + (p.tables || []).reduce((m, t) => m + (t.headerRows || []).length, 0), 0
   );
-  console.log(`📊 Document AI detected ${tableCount} table(s)`);
-  console.log(`📄 Raw text (first 800 chars):\n${extractedText.substring(0, 800)}`);
+  const bodyRowCount = (doc.pages || []).reduce(
+    (n, p) => n + (p.tables || []).reduce((m, t) => m + (t.bodyRows || []).length, 0), 0
+  );
+  console.log(
+    `📊 Document AI: ${tableCount} table(s), ${headerRowCount} header row(s), ${bodyRowCount} body row(s)`
+  );
+  console.log(`📄 Raw text (first 600 chars):\n${extractedText.substring(0, 600)}`);
 
-  // Primary: table-structured extraction
-  let medicines  = extractFromTables(document);
+  // Primary: table extraction
+  let medicines  = extractFromTables(doc);
   let usedMethod = "table";
 
   if (medicines.length < 3) {
-    console.log(
-      `⚠️  Table extraction found ${medicines.length} medicine(s) — using text fallback`
-    );
+    console.log(`⚠️  Table extraction yielded ${medicines.length} → using text fallback`);
     medicines  = extractFromText(extractedText);
     usedMethod = "text-fallback";
   }
 
-  console.log(
-    `✅ Extraction complete: ${medicines.length} medicine(s) via [${usedMethod}]`
-  );
-
+  console.log(`✅ Extraction done: ${medicines.length} medicine(s) via [${usedMethod}]`);
   return { extractedText, medicines };
 }
 
