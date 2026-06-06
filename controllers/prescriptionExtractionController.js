@@ -22,7 +22,7 @@ function normalizeMedicineName(text = "") {
 
 // ─── Fuzzy match score 0–100 ──────────────────────────────────────────────────
 
-const MIN_MATCH_SCORE = 75;
+const MIN_MATCH_SCORE = 50;
 
 function getMedicineMatchScore(ocrName = "", dbName = "") {
   const ocr = normalizeMedicineName(ocrName);
