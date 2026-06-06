@@ -92,24 +92,49 @@ function cleanDose(v) {
 }
 
 function cleanFrequency(v) {
-  // Normalise separators & OCR mistakes
-  const text = String(v || "")
-    .replace(/\s+/g, "")
-    .replace(/[–—]/g, "-")
-    .replace(/[|_]/g, "-")
-    .replace(/[Oo]/g, "0");
+  const raw = String(v || "").trim();
+  if (!raw) return "";
 
-  // N-N-N pattern (most reliable)
-  const m = text.match(/\d-\d-\d/);
+  // ── 1. Digit N-N-N pattern ─────────────────────────────────────────────────
+  // Accepts dash / dot / slash / pipe / × as separator, and O/o → 0 for OCR errors.
+  // Handles "1-0-1", "1.0.1", "1/0/1", "1 - 0 - 1", "1-O-1" etc.
+  const forDigit = raw
+    .replace(/\s+/g, "")
+    .replace(/[–—·•]/g, "-")
+    .replace(/[|_×\.\/]/g, "-")
+    .replace(/[Oo]/g, "0");
+  const m = forDigit.match(/\d-\d-\d/);
   if (m) return m[0];
 
-  // BD / OD / TDS / QID abbreviations
-  const upper = String(v || "").toUpperCase().replace(/\s+/g, "");
-  if (upper === "OD")               return "1-0-0";
-  if (upper === "BD" || upper === "BID") return "1-0-1";
-  if (upper === "TDS" || upper === "TID" || upper === "TD") return "1-1-1";
-  if (upper === "QID" || upper === "QD") return "1-1-1";
-  if (upper === "HS" || upper === "SOS") return "0-0-1";
+  // ── 2. Space-separated digits "1 0 1" ─────────────────────────────────────
+  const spaceM = raw.match(/\b(\d)\s+(\d)\s+(\d)\b/);
+  if (spaceM) return `${spaceM[1]}-${spaceM[2]}-${spaceM[3]}`;
+
+  // ── 3. Abbreviations — exact after stripping spaces / dots / slashes ───────
+  // Handles "B.D", "O.D", "T.D.S", "H/S", "B D", etc.
+  const norm = raw.toUpperCase().replace(/[\s\.\-\/]/g, "");
+  if (norm === "OD")                                     return "1-0-0";
+  if (norm === "BD" || norm === "BID")                   return "1-0-1";
+  if (norm === "TDS" || norm === "TID" || norm === "TD") return "1-1-1";
+  if (norm === "QID" || norm === "QD")                   return "1-1-1";
+  if (norm === "HS" || norm === "SOS")                   return "0-0-1";
+
+  // ── 4. Word-boundary — handles "BD (Twice Daily)", "OD - once a day", etc. ─
+  const u = raw.toUpperCase();
+  if (/\bOD\b/.test(u))         return "1-0-0";
+  if (/\b(BD|BID)\b/.test(u))   return "1-0-1";
+  if (/\b(TDS|TID)\b/.test(u))  return "1-1-1";
+  if (/\bQID\b/.test(u))        return "1-1-1";
+  if (/\bHS\b/.test(u))         return "0-0-1";
+  if (/\bSOS\b/.test(u))        return "0-0-1";
+
+  // ── 5. Natural language ────────────────────────────────────────────────────
+  if (/\bTWICE\b/.test(u))                              return "1-0-1";
+  if (/\bONCE\s*(DAILY|A\s+DAY)\b/.test(u))            return "1-0-0";
+  if (/\b(THRICE|THREE\s+TIMES)\b/.test(u))             return "1-1-1";
+  if (/\bMORNING\b/.test(u) && !/\bNIGHT\b/.test(u))  return "1-0-0";
+  if (/\bNIGHT\b/.test(u)   && !/\bMORNING\b/.test(u)) return "0-0-1";
+  if (/\bBEDTIME\b/.test(u))                            return "0-0-1";
 
   return "";
 }
