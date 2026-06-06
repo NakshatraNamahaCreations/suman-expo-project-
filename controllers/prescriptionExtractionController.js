@@ -61,6 +61,7 @@ function getMedicineMatchScore(ocrName = "", dbName = "") {
 
 async function matchMedicinesWithDatabase(ocrMedicines) {
   const matched = [];
+  const seenDbIds = new Set(); // prevent duplicate DB medicines in response
 
   try {
     const dbMedicines = await Medicine.find({ status: "Active" }).lean();
@@ -84,6 +85,13 @@ async function matchMedicinesWithDatabase(ocrMedicines) {
       }
 
       if (bestMatch && bestScore >= MIN_MATCH_SCORE) {
+        const dbId = bestMatch._id.toString();
+        // Skip if this DB medicine was already matched by a previous OCR name
+        if (seenDbIds.has(dbId)) {
+          console.log(`⚠️  Duplicate DB match skipped: "${ocrName}" → already matched to ${dbId}`);
+          continue;
+        }
+        seenDbIds.add(dbId);
         const durationDays = ocrMed.durationDays || 0;
 
         matched.push({
