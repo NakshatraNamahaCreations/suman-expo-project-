@@ -96,16 +96,15 @@ function cleanFrequency(v) {
   if (!raw) return "";
 
   // ── 1. Digit N-N-N pattern ─────────────────────────────────────────────────
-  // Accepts any common separator and fixes OCR digit-look-alike characters.
+  // After removing spaces, replace every non-alphanumeric character with "-".
+  // This handles ASCII hyphens, Unicode minus signs, en/em dashes, slashes —
+  // whatever separator Document AI happens to emit.  Letters are preserved so
+  // the abbreviation steps below (OD/BD/TDS) can still fire.
   const forDigit = raw
     .replace(/\s+/g, "")
-    // All Unicode dash/bullet variants → "-"
-    .replace(/[‐‑‒–—―−–—·•]/g, "-")
-    // Pipe, underscore, ×, slash, plus → "-"
-    .replace(/[|_×\/\+]/g, "-")
-    // OCR substitutions: O/o → 0,  I/l → 1
-    .replace(/[Oo]/g, "0")
-    .replace(/[Il]/g, "1");
+    .replace(/[^a-zA-Z0-9]/g, "-")   // any non-alphanum separator → "-"
+    .replace(/[Oo]/g, "0")            // OCR: letter O → digit 0
+    .replace(/[Il]/g, "1");           // OCR: letter I/l → digit 1
   const m = forDigit.match(/\d-\d-\d/);
   if (m) return m[0];
 
@@ -348,12 +347,14 @@ function parseTablesFromDocument(document) {
         if (!cleanFrequency(freqRaw) && freqRaw.trim()) {
           const u = freqRaw.toUpperCase();
           const nlFreq =
-            /\bTWICE\b/.test(u)                                ? "1-0-1" :
-            /\bONCE\b/.test(u) || /\bDAILY\b/.test(u)         ? "1-0-0" :
-            /\b(THRICE|THREE\s+TIMES)\b/.test(u)               ? "1-1-1" :
-            (/\bMORNING\b/.test(u) && !/\bNIGHT\b/.test(u))   ? "1-0-0" :
-            (/\bNIGHT\b/.test(u)   && !/\bMORNING\b/.test(u)) ? "0-0-1" :
-            /\bBEDTIME\b/.test(u)                              ? "0-0-1" : "";
+            /\bTWICE\b/.test(u)                                       ? "1-0-1" :
+            /\bTHRICE\b|THREE\s+TIMES/.test(u)                        ? "1-1-1" :
+            /\b(REQUIRED|SOS|NEEDED|AS\s+WHEN|WHEN\s+REQUIRED)\b/.test(u) ? "0-0-1" :
+            /\bWEEK\b/.test(u)                                         ? "0-0-1" :
+            /\bONCE\b/.test(u) || /\bDAILY\b/.test(u)                 ? "1-0-0" :
+            (/\bMORNING\b/.test(u) && !/\bNIGHT\b/.test(u))           ? "1-0-0" :
+            (/\bNIGHT\b/.test(u)   && !/\bMORNING\b/.test(u))         ? "0-0-1" :
+            /\bBEDTIME\b/.test(u)                                      ? "0-0-1" : "";
           if (nlFreq) {
             console.log(`   🔍 freq NL resolved: "${freqRaw}" → "${nlFreq}"`);
             freqRaw = nlFreq;
@@ -410,6 +411,26 @@ function parseTablesFromDocument(document) {
         // Single number inside duration text (e.g. "6 Month(s)") → qtyRaw stays 0
         // → buildMedicineRow will fall back to calculated qty (dose × freq × days)
         console.log(`   qty cell: "${qtyStr}" → qtyRaw:${qtyRaw}`);
+
+        // Qty-based freq inference (last resort): when every other approach fails,
+        // compute tablets-per-day = prescriptionQty ÷ (dose × durationDays).
+        // This correctly infers CLOPI A → 360/(1×180)=2/day → "1-0-1".
+        // NOTE: timing (M/A/N) can't be inferred from qty alone — only the count.
+        if (!cleanFrequency(freqRaw) && qtyRaw > 0) {
+          const inferDurDays = getDurationDays(cleanDurationLabel(durRaw));
+          if (inferDurDays > 0) {
+            const doseCount = Number((get(doseIdx).match(/\d+/) || ["1"])[0]) || 1;
+            const perDay    = Math.round(qtyRaw / (doseCount * inferDurDays));
+            const inferred  =
+              perDay >= 3 ? "1-1-1" :
+              perDay === 2 ? "1-0-1" :
+              perDay === 1 ? "1-0-0" : "";
+            if (inferred) {
+              freqRaw = inferred;
+              console.log(`   🔍 freq inferred: ${qtyRaw}÷(${doseCount}×${inferDurDays}d)=${perDay}/day → "${inferred}"`);
+            }
+          }
+        }
 
         const med = buildMedicineRow({
           medicineName:  medName,
