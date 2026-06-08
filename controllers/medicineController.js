@@ -470,6 +470,24 @@ exports.deleteAllMedicines = async (req, res) => {
   }
 };
 
+/* ===============================
+   DELETE BY VENDOR
+================================ */
+exports.deleteByVendor = async (req, res) => {
+  try {
+    const vendorName = decodeURIComponent(req.params.vendorName);
+    if (!vendorName) return res.status(400).json({ success: false, message: "Vendor name required" });
+    const result = await Medicine.deleteMany({ vendor: vendorName });
+    res.json({
+      success: true,
+      message: `Deleted ${result.deletedCount} medicines for vendor "${vendorName}"`,
+      deletedCount: result.deletedCount,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
 
 /* ===============================
    ADJUST STOCK

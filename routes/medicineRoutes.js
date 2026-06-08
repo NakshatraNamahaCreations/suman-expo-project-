@@ -11,6 +11,7 @@ router.post("/", controller.createMedicine);
 router.get("/", controller.getMedicines);
 
 router.delete("/all", controller.deleteAllMedicines);
+router.delete("/vendor/:vendorName", controller.deleteByVendor);
 
 router.get("/:id", controller.getMedicineById);
 
