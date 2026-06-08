@@ -9,7 +9,7 @@ const healthArticleSchema = new mongoose.Schema(
   {
     title:            { type: String, required: true, trim: true },
     shortDescription: { type: String, required: true, trim: true },
-    readingTime:      { type: String, required: true, trim: true },
+    readingTime:      { type: String, default: "", trim: true },
     image:            { type: String, default: "" },
     imagePublicId:    { type: String, default: "" },
     sections:         [sectionSchema],
