@@ -48,17 +48,15 @@ exports.getById = async (req, res) => {
 /* POST /api/health-articles  — Admin */
 exports.create = async (req, res) => {
   try {
-    const { title, shortDescription, readingTime, status } = req.body;
+    const { title, shortDescription, status } = req.body;
     if (!title?.trim())            return res.status(400).json({ success: false, message: "Title is required" });
     if (!shortDescription?.trim()) return res.status(400).json({ success: false, message: "Short description is required" });
-    if (!readingTime?.trim())      return res.status(400).json({ success: false, message: "Reading time is required" });
 
     const sections = parseSections(req.body.sections).filter(s => s.title?.trim() || s.description?.trim());
 
     const article = await HealthArticle.create({
       title:            title.trim(),
       shortDescription: shortDescription.trim(),
-      readingTime:      readingTime.trim(),
       image:            req.file?.path     || "",
       imagePublicId:    req.file?.filename || "",
       sections,
@@ -73,11 +71,10 @@ exports.create = async (req, res) => {
 /* PUT /api/health-articles/:id  — Admin */
 exports.update = async (req, res) => {
   try {
-    const { title, shortDescription, readingTime, status } = req.body;
+    const { title, shortDescription, status } = req.body;
     const updates = {};
     if (title            !== undefined) updates.title            = title.trim();
     if (shortDescription !== undefined) updates.shortDescription = shortDescription.trim();
-    if (readingTime      !== undefined) updates.readingTime      = readingTime.trim();
     if (status           !== undefined) updates.status           = status;
     if (req.body.sections !== undefined) {
       updates.sections = parseSections(req.body.sections).filter(s => s.title?.trim() || s.description?.trim());
