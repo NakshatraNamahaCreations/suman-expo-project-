@@ -12,21 +12,30 @@ const { deleteFromCloudinary } = require("../config/cloudinary");
 ══════════════════════════════════════════════════════════════ */
 router.get("/admin/all", async (req, res) => {
   try {
-    const page    = Math.max(1, parseInt(req.query.page)  || 1);
-    const limit   = Math.min(100, parseInt(req.query.limit) || 20);
-    const search  = (req.query.search || "").trim();
-    const skip    = (page - 1) * limit;
+    const page     = Math.max(1, parseInt(req.query.page)  || 1);
+    const limit    = Math.min(100, parseInt(req.query.limit) || 20);
+    const search   = (req.query.search || "").trim();
+    const fromDate = req.query.fromDate;
+    const toDate   = req.query.toDate;
+    const skip     = (page - 1) * limit;
 
     // Build search filter
     let matchQuery = {};
     if (search) {
-      matchQuery = {
-        $or: [
-          { patientName: { $regex: search, $options: "i" } },
-          { originalFileName: { $regex: search, $options: "i" } },
-          { userId: { $regex: search, $options: "i" } },
-        ],
-      };
+      matchQuery.$or = [
+        { patientName: { $regex: search, $options: "i" } },
+        { originalFileName: { $regex: search, $options: "i" } },
+        { userId: { $regex: search, $options: "i" } },
+      ];
+    }
+    if (fromDate || toDate) {
+      matchQuery.createdAt = {};
+      if (fromDate) matchQuery.createdAt.$gte = new Date(fromDate);
+      if (toDate) {
+        const end = new Date(toDate);
+        end.setHours(23, 59, 59, 999);
+        matchQuery.createdAt.$lte = end;
+      }
     }
 
     const [files, total] = await Promise.all([
