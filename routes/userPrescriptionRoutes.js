@@ -5,6 +5,17 @@ const Patient = require("../models/Patient");
 const { prescriptionUpload } = require("../middleware/cloudinaryUpload");
 const { deleteFromCloudinary } = require("../config/cloudinary");
 
+async function generatePrescriptionId() {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let id, exists;
+  do {
+    id = "PRX-";
+    for (let i = 0; i < 6; i++) id += chars[Math.floor(Math.random() * chars.length)];
+    exists = await UserPrescriptionFile.exists({ prescriptionId: id });
+  } while (exists);
+  return id;
+}
+
 /* ══════════════════════════════════════════════════════════════
    GET /api/user-prescriptions/admin/all
    Admin: fetch ALL prescription files with patient info,
@@ -23,6 +34,7 @@ router.get("/admin/all", async (req, res) => {
     let matchQuery = {};
     if (search) {
       matchQuery.$or = [
+        { prescriptionId: { $regex: search, $options: "i" } },
         { patientName: { $regex: search, $options: "i" } },
         { originalFileName: { $regex: search, $options: "i" } },
         { userId: { $regex: search, $options: "i" } },
@@ -151,7 +163,10 @@ router.post(
           ? "image"
           : "other";
 
+      const prescriptionId = await generatePrescriptionId();
+
       const doc = await UserPrescriptionFile.create({
+        prescriptionId,
         userId,
         patientId: patientId || null,
         patientName: patientName || "",

@@ -6,6 +6,13 @@ const mongoose = require("mongoose");
  */
 const userPrescriptionFileSchema = new mongoose.Schema(
   {
+    prescriptionId: {
+      type: String,
+      unique: true,
+      sparse: true,
+      index: true,
+    },
+
     userId: {
       type: String,
       required: true,
