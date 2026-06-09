@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+const mongoose = require("mongoose");
 const UserPrescriptionFile = require("../models/UserPrescriptionFile");
 const Patient = require("../models/Patient");
 const LoginUser = require("../models/LoginUser");
@@ -31,20 +32,22 @@ router.get("/admin/all", async (req, res) => {
     const toDate   = req.query.toDate;
     const skip     = (page - 1) * limit;
 
-    // Build search filter — also resolve registered user name → userId
+    // Build search filter — resolve user name → _id for userId lookup
     let matchQuery = {};
     if (search) {
-      // Find login users whose name matches the search, get their phone (= userId)
+      // Find login users whose name matches, get both _id and phone
       const matchedUsers = await LoginUser.find({ name: { $regex: search, $options: "i" } })
-        .select("phone").lean();
-      const matchedPhones = matchedUsers.map(u => u.phone).filter(Boolean);
+        .select("_id phone").lean();
+      const matchedUserIds = matchedUsers.map(u => String(u._id));
+      const matchedPhones  = matchedUsers.map(u => u.phone).filter(Boolean);
+      const matchedIds     = [...matchedUserIds, ...matchedPhones];
 
       matchQuery.$or = [
-        { prescriptionId: { $regex: search, $options: "i" } },
-        { patientName:    { $regex: search, $options: "i" } },
+        { prescriptionId:   { $regex: search, $options: "i" } },
+        { patientName:      { $regex: search, $options: "i" } },
         { originalFileName: { $regex: search, $options: "i" } },
-        { userId:         { $regex: search, $options: "i" } },
-        ...(matchedPhones.length ? [{ userId: { $in: matchedPhones } }] : []),
+        { userId:           { $regex: search, $options: "i" } },
+        ...(matchedIds.length ? [{ userId: { $in: matchedIds } }] : []),
       ];
     }
     if (fromDate || toDate) {
@@ -76,20 +79,36 @@ router.get("/admin/all", async (req, res) => {
       patients.forEach(p => { patientMap[p.patientId] = p; });
     }
 
-    // Enrich with registered user name (phone = userId)
+    // Enrich with registered user info — userId may be _id or phone
     const userIds = [...new Set(files.map(f => f.userId).filter(Boolean))];
-    let userMap = {};
+    let userMap = {}; // userId → { name, phone }
     if (userIds.length) {
-      const loginUsers = await LoginUser.find({ phone: { $in: userIds } })
-        .select("phone name").lean();
-      loginUsers.forEach(u => { userMap[u.phone] = u.name; });
+      const objectIds = userIds.filter(id => mongoose.Types.ObjectId.isValid(id));
+      const phones    = userIds.filter(id => !mongoose.Types.ObjectId.isValid(id));
+      const orClauses = [];
+      if (objectIds.length) orClauses.push({ _id:   { $in: objectIds } });
+      if (phones.length)    orClauses.push({ phone: { $in: phones    } });
+
+      if (orClauses.length) {
+        const loginUsers = await LoginUser.find({ $or: orClauses })
+          .select("_id phone name").lean();
+        loginUsers.forEach(u => {
+          const entry = { name: u.name, phone: u.phone };
+          userMap[String(u._id)] = entry;
+          if (u.phone) userMap[u.phone] = entry;
+        });
+      }
     }
 
-    const enriched = files.map(f => ({
-      ...f,
-      patient:           f.patientId ? (patientMap[f.patientId] || null) : null,
-      registeredUserName: userMap[f.userId] || null,
-    }));
+    const enriched = files.map(f => {
+      const userInfo = userMap[f.userId] || null;
+      return {
+        ...f,
+        patient:            f.patientId ? (patientMap[f.patientId] || null) : null,
+        registeredUserName: userInfo?.name  || null,
+        registeredPhone:    userInfo?.phone || null,
+      };
+    });
 
     return res.json({
       success: true,
