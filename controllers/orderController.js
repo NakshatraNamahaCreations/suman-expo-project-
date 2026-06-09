@@ -277,10 +277,13 @@ exports.generatePaymentLink = async (req, res) => {
       try { await razorpay.paymentLink.cancel(order.razorpayPaymentLinkId); } catch (_) {}
     }
 
-    // Validate amount — Razorpay minimum is ₹1 (100 paise)
+    // Validate amount — Razorpay min ₹1 (100 paise), max ₹5 lakh (50,000,000 paise)
     const amountPaise = Math.round((order.totalAmount || 0) * 100);
     if (amountPaise < 100) {
       return res.status(400).json({ success: false, message: `Order amount ₹${order.totalAmount || 0} is too low to generate a payment link (minimum ₹1)` });
+    }
+    if (amountPaise > 50000000) {
+      return res.status(400).json({ success: false, message: `Order amount ₹${(order.totalAmount || 0).toLocaleString("en-IN")} exceeds Razorpay's ₹5,00,000 payment link limit. Please collect payment offline or split the order.` });
     }
 
     // Always create a fresh link. reference_id must be unique per Razorpay link, so
@@ -889,20 +892,52 @@ exports.deleteOrder = async (req, res) => {
     const order = await Order.findById(req.params.id);
 
     if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: "Order not found"
-      });
+      return res.status(404).json({ success: false, message: "Order not found" });
     }
 
-    // ✅ SOFT DELETE
+    // Attempt to save a log entry — errors here must NOT block the delete
+    try {
+      const OrderLog = require("../models/OrderLog");
+      const remark    = (req.body && req.body.remark)    ? String(req.body.remark)    : "";
+      const deletedBy = (req.body && req.body.deletedBy) ? String(req.body.deletedBy) : "Admin";
+
+      const logData = {
+        orderId:       order.orderId       || "",
+        orderDbId:     order._id.toString(),
+        customerName:  (order.patientDetails && order.patientDetails.name)         || "",
+        patientName:   (order.patientDetails && order.patientDetails.name)         || "",
+        mobileNumber:  (order.patientDetails && (order.patientDetails.primaryPhone || order.patientDetails.phone)) || order.userId || "",
+        totalAmount:   order.totalAmount   || 0,
+        orderStatus:   order.orderStatus   || "",
+        paymentStatus: order.paymentStatus || "",
+        remark,
+        deletedBy,
+        deletedAt:     new Date(),
+        // Shallow snapshot — avoid Mongoose internal properties that cause BSON issues
+        snapshot: {
+          orderId:        order.orderId,
+          totalAmount:    order.totalAmount,
+          orderStatus:    order.orderStatus,
+          paymentStatus:  order.paymentStatus,
+          patientDetails: order.patientDetails,
+          deliveryAddress: order.deliveryAddress,
+          items:          (order.items || []).map(i => ({ name: i.name, qty: i.qty, price: i.price })),
+          createdAt:      order.createdAt,
+        },
+      };
+
+      await OrderLog.create(logData);
+      console.log(`✅ OrderLog saved for ${order.orderId} — remark: "${remark}"`);
+    } catch (logErr) {
+      // Log creation failure must not block the delete
+      console.error("⚠️ OrderLog creation failed:", logErr.message);
+    }
+
+    // Soft delete
     order.isDeleted = true;
     await order.save();
 
-    res.json({
-      success: true,
-      message: "Order deleted successfully"
-    });
+    res.json({ success: true, message: "Order deleted successfully" });
 
   } catch (err) {
     res.status(500).json({ error: err.message });

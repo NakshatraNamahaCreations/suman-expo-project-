@@ -41,6 +41,31 @@ router.get("/billing", getBillingTable);
 // GET ALL ORDERS
 router.get("/", getOrders);
 
+// GET DELETED ORDERS (soft-deleted)
+router.get("/deleted", async (req, res) => {
+  try {
+    const Order = require("../models/Order");
+    const orders = await Order.find({ isDeleted: true }).sort({ updatedAt: -1 }).lean();
+    res.json({ success: true, data: orders, total: orders.length });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// UNDELETE (RESTORE) ORDER
+router.patch("/:id/undelete", async (req, res) => {
+  try {
+    const Order = require("../models/Order");
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+    order.isDeleted = false;
+    await order.save();
+    res.json({ success: true, message: "Order restored successfully" });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // GET USER'S ORDERS (before /:id to avoid shadowing)
 router.get("/user/:userId", async (req, res) => {
   try {
