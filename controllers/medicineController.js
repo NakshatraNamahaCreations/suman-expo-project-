@@ -1,4 +1,5 @@
 const Medicine = require("../models/Medicine");
+const Order    = require("../models/Order");
 const XLSX = require("xlsx");
 const fs = require("fs");
 
@@ -542,5 +543,85 @@ exports.adjustStock = async (req, res) => {
       message: "Stock update failed",
       error: error.message,
     });
+  }
+};
+
+/* ══════════════════════════════════════════════════════
+   GET /api/medicines/demand/forecast
+   Dynamic demand forecast — aggregates Order items from
+   the last 30 days, joins with Medicine for current stock,
+   and returns ranked demand list.
+══════════════════════════════════════════════════════ */
+exports.getDemandForecast = async (req, res) => {
+  try {
+    const days  = parseInt(req.query.days) || 30;
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    // Aggregate sold quantity per medicine from orders in the window
+    const sold = await Order.aggregate([
+      { $match: { createdAt: { $gte: since }, isDeleted: { $ne: true } } },
+      { $unwind: "$items" },
+      {
+        $group: {
+          _id:          "$items.medicineId",
+          name:         { $first: "$items.description" },
+          mfr:          { $first: "$items.mfr" },
+          pack:         { $first: "$items.pack" },
+          qtySold:      { $sum:   "$items.qty" },
+          orderCount:   { $sum:   1 },
+          totalRevenue: { $sum:   "$items.subtotal" },
+        },
+      },
+      { $sort: { qtySold: -1 } },
+    ]);
+
+    if (!sold.length) {
+      return res.json({ success: true, data: [], days, message: "No sales data in the selected period" });
+    }
+
+    // Fetch current stock for the matched medicines
+    const ids = sold.map(r => r._id).filter(Boolean);
+    const medicines = await Medicine.find({ _id: { $in: ids } })
+      .select("_id qty demand30 status")
+      .lean();
+    const stockMap = {};
+    medicines.forEach(m => { stockMap[String(m._id)] = m; });
+
+    const data = sold.map(r => {
+      const med       = stockMap[String(r._id)] || {};
+      const stock     = med.qty ?? 0;
+      const dailyRate = r.qtySold / days;                       // avg units/day
+      const daysLeft  = dailyRate > 0 ? Math.round(stock / dailyRate) : null;
+      const reorderIn = daysLeft !== null ? Math.max(0, daysLeft - 7) : null; // flag 7 days before stockout
+
+      let urgency = "healthy";
+      if (daysLeft !== null) {
+        if (daysLeft <= 7)  urgency = "critical";
+        else if (daysLeft <= 30) urgency = "low";
+      }
+
+      return {
+        medicineId:   String(r._id),
+        name:         r.name || "Unknown",
+        mfr:          r.mfr  || "—",
+        pack:         r.pack || "—",
+        qtySold:      r.qtySold,
+        orderCount:   r.orderCount,
+        totalRevenue: r.totalRevenue,
+        dailyRate:    Math.round(dailyRate * 100) / 100,
+        weeklyRate:   Math.round(dailyRate * 7  * 10) / 10,
+        monthlyRate:  Math.round(dailyRate * 30 * 10) / 10,
+        currentStock: stock,
+        daysLeft,
+        reorderIn,
+        urgency,
+        status:       med.status || "Active",
+      };
+    });
+
+    return res.json({ success: true, data, days, total: data.length });
+  } catch (err) {
+    console.error("Demand forecast error:", err);
+    return res.status(500).json({ success: false, message: "Demand forecast error", error: err.message });
   }
 };

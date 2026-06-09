@@ -9,6 +9,7 @@ const upload = require("../middleware/upload"); // ✅ ADD THIS
 router.post("/", controller.createMedicine);
 
 router.get("/", controller.getMedicines);
+router.get("/demand/forecast", controller.getDemandForecast);
 
 router.delete("/all", controller.deleteAllMedicines);
 router.delete("/vendor/:vendorName", controller.deleteByVendor);

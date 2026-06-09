@@ -620,7 +620,7 @@ exports.createOrder = async (req, res) => {
 
     const order = await Order.create(orderData);
 
-    // ✅ 🔥 DEDUCT STOCK (only if items exist)
+    // ✅ 🔥 DEDUCT STOCK + INCREMENT DEMAND (only if items exist)
     if (items && items.length > 0) {
       await Medicine.bulkWrite(
         items.map((item) => ({
@@ -629,6 +629,7 @@ exports.createOrder = async (req, res) => {
             update: {
               $inc: {
                 qty: -item.qty,
+                demand30: item.qty,
               },
             },
           },

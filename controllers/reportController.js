@@ -202,8 +202,7 @@ exports.getInventoryReport = async (req, res) => {
 exports.getStateRevenue = async (req, res) => {
   try {
     const data = await Order.aggregate([
-      // Match all paid orders (don't pre-filter on state — handle nulls in $match after $group)
-      { $match: { paymentStatus: "Paid" } },
+      { $match: { isDeleted: { $ne: true } } },
       {
         $group: {
           _id: "$addressDetails.state",
@@ -211,7 +210,6 @@ exports.getStateRevenue = async (req, res) => {
           orders: { $sum: 1 },
         },
       },
-      // Filter out null / empty / undefined state groups
       { $match: { _id: { $nin: [null, "", undefined] } } },
       { $sort: { revenue: -1 } },
     ]);

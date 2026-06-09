@@ -43,6 +43,12 @@ const medicineSchema = new mongoose.Schema(
       default: 0
     },
 
+    /* DEMAND TRACKING */
+    demand30: {
+      type: Number,
+      default: 0
+    },
+
     /* PRICING */
     oldMrp: {
       type: Number,
