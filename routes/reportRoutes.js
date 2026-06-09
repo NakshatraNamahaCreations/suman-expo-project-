@@ -6,5 +6,6 @@ router.get("/orders", report.getOrdersTrend);
 router.get("/revenue", report.getRevenueTrend);
 router.get("/inventory", report.getInventoryReport);
 router.get("/ca-report", report.getCAReport);
+router.get("/state-revenue", report.getStateRevenue);
 
 module.exports = router;

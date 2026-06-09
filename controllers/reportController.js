@@ -197,6 +197,43 @@ exports.getInventoryReport = async (req, res) => {
 };
 
 /* =========================
+   STATE-WISE REVENUE REPORT
+========================= */
+exports.getStateRevenue = async (req, res) => {
+  try {
+    const data = await Order.aggregate([
+      // Match all paid orders (don't pre-filter on state — handle nulls in $match after $group)
+      { $match: { paymentStatus: "Paid" } },
+      {
+        $group: {
+          _id: "$addressDetails.state",
+          revenue: { $sum: "$totalAmount" },
+          orders: { $sum: 1 },
+        },
+      },
+      // Filter out null / empty / undefined state groups
+      { $match: { _id: { $nin: [null, "", undefined] } } },
+      { $sort: { revenue: -1 } },
+    ]);
+
+    const total = data.reduce((s, r) => s + r.revenue, 0);
+    res.json({
+      success: true,
+      data: data.map(r => ({
+        state: r._id,
+        revenue: r.revenue,
+        orders: r.orders,
+        pct: total > 0 ? Math.round((r.revenue / total) * 100) : 0,
+      })),
+      total,
+    });
+  } catch (err) {
+    console.error("State revenue error:", err);
+    res.status(500).json({ success: false, message: "State revenue error" });
+  }
+};
+
+/* =========================
    CA REPORT (Payment/Transaction Details)
 ========================= */
 exports.getCAReport = async (req, res) => {
