@@ -55,11 +55,46 @@ router.get("/deleted", async (req, res) => {
 // UNDELETE (RESTORE) ORDER
 router.patch("/:id/undelete", async (req, res) => {
   try {
-    const Order = require("../models/Order");
+    const Order    = require("../models/Order");
+    const OrderLog = require("../models/OrderLog");
+
     const order = await Order.findById(req.params.id);
     if (!order) return res.status(404).json({ success: false, message: "Order not found" });
+
+    const remark      = req.body?.remark      ? String(req.body.remark)      : "";
+    const restoredBy  = req.body?.restoredBy  ? String(req.body.restoredBy)  : "Admin";
+
+    try {
+      await OrderLog.create({
+        orderId:       order.orderId       || "",
+        orderDbId:     order._id.toString(),
+        customerName:  order.patientDetails?.name         || "",
+        patientName:   order.patientDetails?.name         || "",
+        mobileNumber:  order.patientDetails?.primaryPhone || order.patientDetails?.phone || order.userId || "",
+        totalAmount:   order.totalAmount   || 0,
+        orderStatus:   order.orderStatus   || "",
+        paymentStatus: order.paymentStatus || "",
+        action:        "restored",
+        remark,
+        deletedBy:     restoredBy,
+        deletedAt:     new Date(),
+        snapshot: {
+          orderId:        order.orderId,
+          totalAmount:    order.totalAmount,
+          orderStatus:    order.orderStatus,
+          paymentStatus:  order.paymentStatus,
+          patientDetails: order.patientDetails,
+          items: (order.items || []).map(i => ({ name: i.name, qty: i.qty, price: i.price })),
+          createdAt:      order.createdAt,
+        },
+      });
+    } catch (logErr) {
+      console.error("⚠️ Restore log failed:", logErr.message);
+    }
+
     order.isDeleted = false;
     await order.save();
+
     res.json({ success: true, message: "Order restored successfully" });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
