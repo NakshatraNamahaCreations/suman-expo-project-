@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const UserPrescriptionFile = require("../models/UserPrescriptionFile");
 const Patient = require("../models/Patient");
+const LoginUser = require("../models/LoginUser");
 const { prescriptionUpload } = require("../middleware/cloudinaryUpload");
 const { deleteFromCloudinary } = require("../config/cloudinary");
 
@@ -30,14 +31,20 @@ router.get("/admin/all", async (req, res) => {
     const toDate   = req.query.toDate;
     const skip     = (page - 1) * limit;
 
-    // Build search filter
+    // Build search filter — also resolve registered user name → userId
     let matchQuery = {};
     if (search) {
+      // Find login users whose name matches the search, get their phone (= userId)
+      const matchedUsers = await LoginUser.find({ name: { $regex: search, $options: "i" } })
+        .select("phone").lean();
+      const matchedPhones = matchedUsers.map(u => u.phone).filter(Boolean);
+
       matchQuery.$or = [
         { prescriptionId: { $regex: search, $options: "i" } },
-        { patientName: { $regex: search, $options: "i" } },
+        { patientName:    { $regex: search, $options: "i" } },
         { originalFileName: { $regex: search, $options: "i" } },
-        { userId: { $regex: search, $options: "i" } },
+        { userId:         { $regex: search, $options: "i" } },
+        ...(matchedPhones.length ? [{ userId: { $in: matchedPhones } }] : []),
       ];
     }
     if (fromDate || toDate) {
@@ -69,9 +76,19 @@ router.get("/admin/all", async (req, res) => {
       patients.forEach(p => { patientMap[p.patientId] = p; });
     }
 
+    // Enrich with registered user name (phone = userId)
+    const userIds = [...new Set(files.map(f => f.userId).filter(Boolean))];
+    let userMap = {};
+    if (userIds.length) {
+      const loginUsers = await LoginUser.find({ phone: { $in: userIds } })
+        .select("phone name").lean();
+      loginUsers.forEach(u => { userMap[u.phone] = u.name; });
+    }
+
     const enriched = files.map(f => ({
       ...f,
-      patient: f.patientId ? (patientMap[f.patientId] || null) : null,
+      patient:           f.patientId ? (patientMap[f.patientId] || null) : null,
+      registeredUserName: userMap[f.userId] || null,
     }));
 
     return res.json({
