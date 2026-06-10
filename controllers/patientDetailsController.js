@@ -386,45 +386,28 @@ exports.getAllPatientDetails = async (req, res) => {
       },
 
       // =========================
-      // ✅ DIRECT PRESCRIPTION COUNT
-      // Count prescriptions linked to patient via Prescription.patient field
+      // ✅ PRESCRIPTION COUNT — only orders with prescription uploads
       // =========================
-      {
-        $lookup: {
-          from: "prescriptions",
-          let: { patientId: "$_id" },
-          pipeline: [
-            { $match: { $expr: { $eq: ["$patient", "$$patientId"] } } },
-            { $count: "n" }
-          ],
-          as: "_rxDirect"
-        }
-      },
       {
         $addFields: {
           prescriptionCount: {
-            $add: [
-              { $ifNull: [{ $arrayElemAt: ["$_rxDirect.n", 0] }, 0] },
-              {
-                $size: {
-                  $filter: {
-                    input: { $ifNull: ["$orders", []] },
-                    as: "o",
-                    cond: {
-                      $or: [
-                        { $gt: ["$$o.prescription", null] },
-                        { $gt: ["$$o.userPrescriptionFile.fileId", null] },
-                        { $gt: ["$$o.prescriptionFile.filePath", null] }
-                      ]
-                    }
-                  }
+            $size: {
+              $filter: {
+                input: { $ifNull: ["$orders", []] },
+                as: "o",
+                cond: {
+                  $or: [
+                    { $gt: ["$$o.prescription", null] },
+                    { $gt: ["$$o.userPrescriptionFile.fileId", null] },
+                    { $gt: ["$$o.prescriptionFile.filePath", null] },
+                    { $gt: ["$$o.prescriptionFile.fileName", null] }
+                  ]
                 }
               }
-            ]
+            }
           }
         }
       },
-      { $project: { _rxDirect: 0 } },
 
       // =========================
       // ✅ SORT
@@ -491,10 +474,15 @@ exports.getPatientStats = async (req, res) => {
         newThisMonth++;
       }
 
-      // ✅ With prescription (CORRECT FIX)
-      const hasOrder = p.orders && p.orders.length > 0;
+      // ✅ With prescription — patient must have at least one order with a prescription upload
+      const hasRx = p.orders && p.orders.some(o =>
+        o.prescription ||
+        o.prescriptionFile?.filePath ||
+        o.prescriptionFile?.fileName ||
+        o.userPrescriptionFile?.fileId
+      );
 
-      if (hasOrder) withPrescriptions++;
+      if (hasRx) withPrescriptions++;
 
     });
 
