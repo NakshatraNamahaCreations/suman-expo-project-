@@ -386,6 +386,47 @@ exports.getAllPatientDetails = async (req, res) => {
       },
 
       // =========================
+      // ✅ DIRECT PRESCRIPTION COUNT
+      // Count prescriptions linked to patient via Prescription.patient field
+      // =========================
+      {
+        $lookup: {
+          from: "prescriptions",
+          let: { patientId: "$_id" },
+          pipeline: [
+            { $match: { $expr: { $eq: ["$patient", "$$patientId"] } } },
+            { $count: "n" }
+          ],
+          as: "_rxDirect"
+        }
+      },
+      {
+        $addFields: {
+          prescriptionCount: {
+            $add: [
+              { $ifNull: [{ $arrayElemAt: ["$_rxDirect.n", 0] }, 0] },
+              {
+                $size: {
+                  $filter: {
+                    input: { $ifNull: ["$orders", []] },
+                    as: "o",
+                    cond: {
+                      $or: [
+                        { $gt: ["$$o.prescription", null] },
+                        { $gt: ["$$o.userPrescriptionFile.fileId", null] },
+                        { $gt: ["$$o.prescriptionFile.filePath", null] }
+                      ]
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      { $project: { _rxDirect: 0 } },
+
+      // =========================
       // ✅ SORT
       // =========================
       {
