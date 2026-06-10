@@ -135,9 +135,9 @@ const vendorRoutes = require("./routes/vendorRoutes");
 const userPrescriptionRoutes = require("./routes/userPrescriptionRoutes");
 const shiprocketRoutes = require("./routes/shiprocket.routes");
 const bannerRoutes = require("./routes/bannerRoutes");
-const orderLogRoutes   = require("./routes/orderLogRoutes");
+const orderLogRoutes = require("./routes/orderLogRoutes");
 const patientLogRoutes = require("./routes/patientLogRoutes");
-const reviewRoutes     = require("./routes/reviewRoutes");
+const reviewRoutes = require("./routes/reviewRoutes");
 const healthArticleRoutes = require("./routes/healthArticleRoutes");
 
 const { authMiddleware } = require("./middleware/auth");
@@ -167,6 +167,7 @@ app.use(
       "https://rgmedlinkadmipanel.netlify.app",
       "https://adorable-selkie-b5b2c0.netlify.app",
       "https://merry-snickerdoodle-fe449f.netlify.app",
+      "https://lustrous-churros-34517a.netlify.app",
       /\.rgmedlink\.com$/,
       /\.onrender\.com$/,
       /\.vercel\.app$/,
@@ -222,7 +223,7 @@ app.use("/api/patients", patientRoutes);
 app.use("/api/prescriptions", prescriptionRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/orders", orderRoutes);
-app.use("/api/order-logs",   orderLogRoutes);
+app.use("/api/order-logs", orderLogRoutes);
 app.use("/api/patient-logs", patientLogRoutes);
 // reviews moved below intentionally — see pre-auth block
 app.use("/api/reports", reportRoutes);
