@@ -554,12 +554,22 @@ exports.adjustStock = async (req, res) => {
 ══════════════════════════════════════════════════════ */
 exports.getDemandForecast = async (req, res) => {
   try {
-    const days  = parseInt(req.query.days) || 30;
-    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    let since, until, days;
+
+    if (req.query.from && req.query.to) {
+      since = new Date(req.query.from);
+      until = new Date(req.query.to);
+      until.setHours(23, 59, 59, 999);
+      days = Math.max(1, Math.round((until - since) / (24 * 60 * 60 * 1000)));
+    } else {
+      days  = parseInt(req.query.days) || 30;
+      since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+      until = new Date();
+    }
 
     // Aggregate sold quantity per medicine from orders in the window
     const sold = await Order.aggregate([
-      { $match: { createdAt: { $gte: since }, isDeleted: { $ne: true } } },
+      { $match: { createdAt: { $gte: since, $lte: until }, isDeleted: { $ne: true } } },
       { $unwind: "$items" },
       {
         $group: {
