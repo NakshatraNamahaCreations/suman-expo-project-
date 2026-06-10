@@ -168,6 +168,7 @@ app.use(
       "https://adorable-selkie-b5b2c0.netlify.app",
       "https://merry-snickerdoodle-fe449f.netlify.app",
       "https://lustrous-churros-34517a.netlify.app",
+      "https://rgmedlink.netlify.app",
       /\.rgmedlink\.com$/,
       /\.onrender\.com$/,
       /\.vercel\.app$/,
