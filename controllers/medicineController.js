@@ -592,22 +592,24 @@ exports.getDemandForecast = async (req, res) => {
     // Fetch current stock for the matched medicines
     const ids = sold.map(r => r._id).filter(Boolean);
     const medicines = await Medicine.find({ _id: { $in: ids } })
-      .select("_id qty demand30 status")
+      .select("_id qty demand30 status lowStockDays criticalStockDays")
       .lean();
     const stockMap = {};
     medicines.forEach(m => { stockMap[String(m._id)] = m; });
 
     const data = sold.map(r => {
-      const med       = stockMap[String(r._id)] || {};
-      const stock     = med.qty ?? 0;
-      const dailyRate = r.qtySold / days;                       // avg units/day
-      const daysLeft  = dailyRate > 0 ? Math.round(stock / dailyRate) : null;
-      const reorderIn = daysLeft !== null ? Math.max(0, daysLeft - 7) : null; // flag 7 days before stockout
+      const med            = stockMap[String(r._id)] || {};
+      const stock          = med.qty ?? 0;
+      const dailyRate      = r.qtySold / days;
+      const daysLeft       = dailyRate > 0 ? Math.round(stock / dailyRate) : null;
+      const critThreshold  = med.criticalStockDays ?? 100;
+      const lowThreshold   = med.lowStockDays ?? 180;
+      const reorderIn      = daysLeft !== null ? Math.max(0, daysLeft - critThreshold) : null;
 
       let urgency = "healthy";
       if (daysLeft !== null) {
-        if (daysLeft <= 7)  urgency = "critical";
-        else if (daysLeft <= 30) urgency = "low";
+        if (daysLeft <= critThreshold) urgency = "critical";
+        else if (daysLeft <= lowThreshold) urgency = "low";
       }
 
       return {
@@ -621,11 +623,13 @@ exports.getDemandForecast = async (req, res) => {
         dailyRate:    Math.round(dailyRate * 100) / 100,
         weeklyRate:   Math.round(dailyRate * 7  * 10) / 10,
         monthlyRate:  Math.round(dailyRate * 30 * 10) / 10,
-        currentStock: stock,
+        currentStock:      stock,
         daysLeft,
         reorderIn,
         urgency,
-        status:       med.status || "Active",
+        status:            med.status || "Active",
+        criticalStockDays: critThreshold,
+        lowStockDays:      lowThreshold,
       };
     });
 

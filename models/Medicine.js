@@ -49,6 +49,17 @@ const medicineSchema = new mongoose.Schema(
       default: 0
     },
 
+    /* STOCK ALERT THRESHOLDS (days of stock remaining) */
+    lowStockDays: {
+      type: Number,
+      default: 180
+    },
+
+    criticalStockDays: {
+      type: Number,
+      default: 100
+    },
+
     /* PRICING */
     oldMrp: {
       type: Number,
