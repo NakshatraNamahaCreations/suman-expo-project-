@@ -257,10 +257,8 @@ exports.getDashboardSummary = async (req, res) => {
         .limit(5)
         .lean(),
 
-      // 🔥 PRESCRIPTION COUNTS (CORRECT LOGIC)
-      Prescription.countDocuments({
-      expiry: { $exists: true }
-    }),
+      // PRESCRIPTION COUNTS
+      Prescription.countDocuments({}),
 
       Prescription.countDocuments({
         expiry: { $exists: true, $gt: next7 }
@@ -310,6 +308,7 @@ exports.getDashboardSummary = async (req, res) => {
         active: activePrescriptions,
         expiring: expiringPrescriptions,
         expired: expiredPrescriptions,
+        noExpiry: totalPrescriptions - activePrescriptions - expiringPrescriptions - expiredPrescriptions,
       },
 
       orders: {
