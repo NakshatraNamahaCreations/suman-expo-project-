@@ -1,6 +1,7 @@
 const Medicine = require("../models/Medicine");
 const Patient = require("../models/Patient");
 const Prescription = require("../models/Prescription");
+const UserPrescriptionFile = require("../models/UserPrescriptionFile");
 const Order = require("../models/Order");
 
 /* ============================================================
@@ -30,6 +31,8 @@ exports.getDashboardSummary = async (req, res) => {
     const now = new Date();
     const next7 = new Date();
     next7.setDate(now.getDate() + 7);
+    const weekStart = new Date();
+    weekStart.setDate(weekStart.getDate() - 7);
 
     /* ── Run ALL aggregations in parallel ── */
     const [
@@ -39,11 +42,7 @@ exports.getDashboardSummary = async (req, res) => {
       inventoryAgg,
       expiryItems,
       topMedsAgg,
-      // 🔥 NEW: prescription counts
-      totalPrescriptions,
-      activePrescriptions,
-      expiringPrescriptions,
-      expiredPrescriptions
+      userRxAgg,
     ] = await Promise.all([
 
       // ── PATIENTS ──
@@ -257,20 +256,15 @@ exports.getDashboardSummary = async (req, res) => {
         .limit(5)
         .lean(),
 
-      // PRESCRIPTION COUNTS
-      Prescription.countDocuments({}),
-
-      Prescription.countDocuments({
-        expiry: { $exists: true, $gt: next7 }
-      }),
-
-      Prescription.countDocuments({
-        expiry: { $gt: now, $lte: next7 }
-      }),
-
-      Prescription.countDocuments({
-        expiry: { $lte: now }
-      }),
+      // USER PRESCRIPTION FILE COUNTS
+      UserPrescriptionFile.aggregate([{
+        $facet: {
+          total:     [{ $count: "count" }],
+          today:     [{ $match: { createdAt: { $gte: todayStart, $lte: todayEnd } } }, { $count: "count" }],
+          thisWeek:  [{ $match: { createdAt: { $gte: weekStart } } }, { $count: "count" }],
+          thisMonth: [{ $match: { createdAt: { $gte: thisMonthStart } } }, { $count: "count" }],
+        }
+      }]),
     ]);
 
     /* ── Patients ── */
@@ -304,11 +298,10 @@ exports.getDashboardSummary = async (req, res) => {
       },
 
       prescriptions: {
-        total: totalPrescriptions,
-        active: activePrescriptions,
-        expiring: expiringPrescriptions,
-        expired: expiredPrescriptions,
-        noExpiry: totalPrescriptions - activePrescriptions - expiringPrescriptions - expiredPrescriptions,
+        total:     userRxAgg[0]?.total[0]?.count     || 0,
+        today:     userRxAgg[0]?.today[0]?.count     || 0,
+        thisWeek:  userRxAgg[0]?.thisWeek[0]?.count  || 0,
+        thisMonth: userRxAgg[0]?.thisMonth[0]?.count || 0,
       },
 
       orders: {
