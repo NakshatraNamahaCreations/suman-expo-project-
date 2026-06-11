@@ -215,6 +215,7 @@ exports.verifyRazorpayPayment = async (req, res) => {
       razorpay_order_id,
       razorpay_payment_id,
       razorpay_signature,
+      orderId,
     } = req.body;
 
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
@@ -238,9 +239,28 @@ exports.verifyRazorpayPayment = async (req, res) => {
       });
     }
 
+    // Update the order to Paid if orderId is provided
+    let order = null;
+    if (orderId) {
+      order = await Order.findByIdAndUpdate(
+        orderId,
+        {
+          $set: {
+            paymentStatus: "Paid",
+            paymentDate: new Date(),
+            razorpayOrderId: razorpay_order_id,
+            razorpayPaymentId: razorpay_payment_id,
+            razorpaySignature: razorpay_signature,
+          },
+        },
+        { new: true }
+      );
+    }
+
     return res.status(200).json({
       success: true,
       message: "Payment verified successfully",
+      order,
       payment: {
         razorpayOrderId: razorpay_order_id,
         razorpayPaymentId: razorpay_payment_id,
@@ -1212,11 +1232,33 @@ exports.reorderOrder = async (req, res) => {
     console.log(`✅ Created new order: ${newOrder.orderId} (ID: ${newOrder._id})`);
     console.log(`💰 Preserved amounts - Subtotal: ${original.subtotal}, GST: ${original.gst}, Delivery: ${original.deliveryFee}, Total: ${original.totalAmount}`);
 
+    // Respond first, then trigger Shiprocket async (same pattern as createOrder)
     res.json({
       success: true,
       message: "Reorder placed successfully",
       order: newOrder,
     });
+
+    setImmediate(async () => {
+      try {
+        console.log(`[Shiprocket] Auto-creating shipment for reorder ${newOrder.orderId}`);
+        await ShiprocketCtrl._doCreateShipment(newOrder);
+        await ShiprocketCtrl._doAssignAWB(newOrder);
+        await ShiprocketCtrl._doGeneratePickup(newOrder);
+        console.log(`[Shiprocket] Full flow complete for reorder ${newOrder.orderId}`);
+      } catch (srErr) {
+        console.error(`[Shiprocket] Auto-flow failed for reorder ${newOrder.orderId}:`, srErr.message);
+        try {
+          await Order.findByIdAndUpdate(newOrder._id, {
+            $set: { "shipping.shiprocketError": srErr.message, "shipping.currentStatus": "Shipment Pending" },
+          });
+        } catch (dbErr) {
+          console.error("[Shiprocket] Could not save error to DB:", dbErr.message);
+        }
+      }
+    });
+
+    return;
   } catch (err) {
     console.error("❌ Reorder error:", err.message);
     console.error("Stack trace:", err.stack);
