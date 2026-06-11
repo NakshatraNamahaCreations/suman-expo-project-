@@ -249,12 +249,22 @@ exports.getDashboardSummary = async (req, res) => {
         .limit(20)
         .lean(),
 
-      // ── TOP MEDS ──
-      Medicine.find({ status: "Active", qty: { $gt: 0 } })
-        .select("description qty newMrp")
-        .sort({ qty: -1 })
-        .limit(5)
-        .lean(),
+      // ── TOP MEDS (by order frequency) ──
+      Order.aggregate([
+        { $unwind: "$items" },
+        {
+          $group: {
+            _id: "$items.medicineId",
+            name: { $first: { $ifNull: ["$items.description", "$items.name"] } },
+            orders: { $sum: 1 },
+            totalQty: { $sum: "$items.qty" },
+            totalRevenue: { $sum: "$items.subtotal" },
+          },
+        },
+        { $match: { name: { $ne: null, $ne: "" } } },
+        { $sort: { orders: -1 } },
+        { $limit: 6 },
+      ]),
 
       // USER PRESCRIPTION FILE COUNTS
       UserPrescriptionFile.aggregate([{
@@ -328,9 +338,10 @@ exports.getDashboardSummary = async (req, res) => {
       },
 
       topMedicines: topMedsAgg.map(med => ({
-        name: med.description,
-        qty: med.qty,
-        price: med.newMrp,
+        name: med.name,
+        orders: med.orders,
+        qty: med.totalQty,
+        revenue: med.totalRevenue,
       })),
 
       expiryItems: expiryItems.map(item => ({
