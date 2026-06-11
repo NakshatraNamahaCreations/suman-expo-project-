@@ -92,22 +92,151 @@ exports.getDashboardSummary = async (req, res) => {
       ]),
 
       // ── INVENTORY ──
+      // Logic mirrors Inventory.jsx getStatus():
+      //   Out of Stock : qty <= 0 (non-Inactive)
+      //   Critical     : qty > 0 AND (qty < 5 OR daysLeft <= criticalStockDays ?? 100)
+      //   Low Stock    : qty > 0, not critical, (qty < 10 OR daysLeft <= lowStockDays ?? 180)
+      //   In Stock     : everything else (non-Inactive)
+      //   daysLeft     = (qty * 30) / demand30  when demand30 > 0
       Medicine.aggregate([
         {
           $facet: {
-            total: [{ $count: "count" }],
+            total: [
+              { $match: { status: { $ne: "Inactive" } } },
+              { $count: "count" },
+            ],
             active: [{ $match: { status: "Active" } }, { $count: "count" }],
-            outOfStock: [{ $match: { qty: 0 } }, { $count: "count" }],
+            outOfStock: [
+              { $match: { status: { $ne: "Inactive" }, $expr: { $lte: ["$qty", 0] } } },
+              { $count: "count" },
+            ],
             critical: [
-              { $match: { $expr: { $and: [{ $gt: ["$qty", 0] }, { $lte: ["$qty", 10] } ] } } },
+              {
+                $match: {
+                  status: { $ne: "Inactive" },
+                  $expr: {
+                    $and: [
+                      { $gt: ["$qty", 0] },
+                      {
+                        $or: [
+                          { $lt: ["$qty", 5] },
+                          {
+                            $and: [
+                              { $gt: [{ $ifNull: ["$demand30", 0] }, 0] },
+                              {
+                                $lte: [
+                                  { $divide: [{ $multiply: ["$qty", 30] }, { $ifNull: ["$demand30", 1] }] },
+                                  { $ifNull: ["$criticalStockDays", 100] }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
               { $count: "count" },
             ],
             lowStock: [
-              { $match: { $expr: { $and: [{ $gt: ["$qty", 10] }, { $lte: ["$qty", 50] } ] } } },
+              {
+                $match: {
+                  status: { $ne: "Inactive" },
+                  $expr: {
+                    $and: [
+                      { $gt: ["$qty", 0] },
+                      // Not critical
+                      {
+                        $not: {
+                          $or: [
+                            { $lt: ["$qty", 5] },
+                            {
+                              $and: [
+                                { $gt: [{ $ifNull: ["$demand30", 0] }, 0] },
+                                {
+                                  $lte: [
+                                    { $divide: [{ $multiply: ["$qty", 30] }, { $ifNull: ["$demand30", 1] }] },
+                                    { $ifNull: ["$criticalStockDays", 100] }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      },
+                      // Is low
+                      {
+                        $or: [
+                          { $lt: ["$qty", 10] },
+                          {
+                            $and: [
+                              { $gt: [{ $ifNull: ["$demand30", 0] }, 0] },
+                              {
+                                $lte: [
+                                  { $divide: [{ $multiply: ["$qty", 30] }, { $ifNull: ["$demand30", 1] }] },
+                                  { $ifNull: ["$lowStockDays", 180] }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
               { $count: "count" },
             ],
             inStock: [
-              { $match: { $expr: { $gt: ["$qty", 50] } } },
+              {
+                $match: {
+                  status: { $ne: "Inactive" },
+                  $expr: {
+                    $and: [
+                      { $gt: ["$qty", 0] },
+                      // Not critical
+                      {
+                        $not: {
+                          $or: [
+                            { $lt: ["$qty", 5] },
+                            {
+                              $and: [
+                                { $gt: [{ $ifNull: ["$demand30", 0] }, 0] },
+                                {
+                                  $lte: [
+                                    { $divide: [{ $multiply: ["$qty", 30] }, { $ifNull: ["$demand30", 1] }] },
+                                    { $ifNull: ["$criticalStockDays", 100] }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      },
+                      // Not low
+                      {
+                        $not: {
+                          $or: [
+                            { $lt: ["$qty", 10] },
+                            {
+                              $and: [
+                                { $gt: [{ $ifNull: ["$demand30", 0] }, 0] },
+                                {
+                                  $lte: [
+                                    { $divide: [{ $multiply: ["$qty", 30] }, { $ifNull: ["$demand30", 1] }] },
+                                    { $ifNull: ["$lowStockDays", 180] }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
               { $count: "count" },
             ],
           },
