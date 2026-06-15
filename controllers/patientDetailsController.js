@@ -148,6 +148,33 @@ exports.getPatientDetails = async (req, res) => {
 };
 
 // ============================
+// SEARCH ALL PATIENTS (admin fallback — no userId filter)
+// ============================
+exports.searchAllPatients = async (req, res) => {
+  try {
+    const { q = "" } = req.query;
+    const query = { isDeleted: false };
+
+    if (q.trim()) {
+      query.$or = [
+        { name: { $regex: q.trim(), $options: "i" } },
+        { primaryPhone: { $regex: q.trim() } },
+        { patientId: { $regex: q.trim(), $options: "i" } },
+      ];
+    }
+
+    const data = await PatientDetails.find(query)
+      .select("_id patientId name primaryPhone gender age userId")
+      .sort({ createdAt: -1 })
+      .limit(20);
+
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Search failed", error: err.message });
+  }
+};
+
+// ============================
 // GET DEFAULT PATIENT
 // ============================
 exports.getDefaultPatient = async (req, res) => {

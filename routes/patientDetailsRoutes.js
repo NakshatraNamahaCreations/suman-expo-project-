@@ -8,13 +8,15 @@ const {
   updatePatientDetails,
   getAllPatientDetails,
   deletePatientDetails,
-  getPatientStats
+  getPatientStats,
+  searchAllPatients,
 } = require("../controllers/patientDetailsController");
 
 router.post("/create", createPatientDetails);
 
 // ✅ Correct order
 router.get("/all", getAllPatientDetails);
+router.get("/search", searchAllPatients);
 
 // ✅ FIX HERE
 router.get("/stats", getPatientStats);
