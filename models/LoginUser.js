@@ -4,10 +4,11 @@ const loginUserSchema = new mongoose.Schema(
   {
     phone: {
       type: String,
-      required: true,
       unique: true,
+      sparse: true,
       match: /^[0-9]{10}$/,
       index: true,
+      default: null,
     },
     name: {
       type: String,
@@ -16,6 +17,11 @@ const loginUserSchema = new mongoose.Schema(
     email: {
       type: String,
       sparse: true,
+      default: null,
+    },
+    password: {
+      type: String,
+      default: null,
     },
     secondaryPhone: {
       type: String,

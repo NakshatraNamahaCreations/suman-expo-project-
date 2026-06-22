@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const bcrypt = require("bcryptjs");
 const LoginUser = require("../models/LoginUser");
 const sms = require("../utils/sms");
 
@@ -609,5 +610,87 @@ exports.deleteUser = async (req, res) => {
       message: "Failed to delete user",
       error: err.message,
     });
+  }
+};
+
+/* ════════════════════════════════════════════════════
+   EMAIL REGISTER
+════════════════════════════════════════════════════ */
+exports.emailRegister = async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+    if (!name || !email || !password) {
+      return res.status(400).json({ success: false, message: "Name, email and password are required" });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ success: false, message: "Password must be at least 6 characters" });
+    }
+    const cleanEmail = email.trim().toLowerCase();
+    const existing = await LoginUser.findOne({ email: cleanEmail });
+    if (existing) {
+      return res.status(400).json({ success: false, message: "Email already registered. Please login." });
+    }
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = new LoginUser({
+      name: name.trim(),
+      email: cleanEmail,
+      password: hashedPassword,
+      isPhoneVerified: false,
+      status: "active",
+    });
+    await user.save();
+    const token = jwt.sign({ userId: user._id.toString(), email: user.email }, JWT_SECRET, { expiresIn: JWT_EXPIRE });
+    return res.json({
+      success: true,
+      token,
+      userId: user._id.toString(),
+      name: user.name,
+      email: user.email,
+      requiresName: false,
+    });
+  } catch (err) {
+    console.error("[EMAIL-REGISTER] Error:", err);
+    return res.status(500).json({ success: false, message: "Registration failed", error: err.message });
+  }
+};
+
+/* ════════════════════════════════════════════════════
+   EMAIL LOGIN
+════════════════════════════════════════════════════ */
+exports.emailLogin = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ success: false, message: "Email and password are required" });
+    }
+    const cleanEmail = email.trim().toLowerCase();
+    const user = await LoginUser.findOne({ email: cleanEmail });
+    if (!user) {
+      return res.status(400).json({ success: false, message: "Email not registered. Please create an account." });
+    }
+    if (!user.password) {
+      return res.status(400).json({ success: false, message: "This account uses phone OTP login." });
+    }
+    if (user.status === "blocked") {
+      return res.status(403).json({ success: false, message: "Account is blocked. Contact support." });
+    }
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ success: false, message: "Incorrect password." });
+    }
+    user.lastLogin = new Date();
+    await user.save();
+    const token = jwt.sign({ userId: user._id.toString(), email: user.email }, JWT_SECRET, { expiresIn: JWT_EXPIRE });
+    return res.json({
+      success: true,
+      token,
+      userId: user._id.toString(),
+      name: user.name,
+      email: user.email,
+      requiresName: !user.name,
+    });
+  } catch (err) {
+    console.error("[EMAIL-LOGIN] Error:", err);
+    return res.status(500).json({ success: false, message: "Login failed", error: err.message });
   }
 };

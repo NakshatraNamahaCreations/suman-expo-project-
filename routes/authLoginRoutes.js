@@ -10,6 +10,8 @@ const {
   adminCreateUser,
   updateUserStatus,
   deleteUser,
+  emailRegister,
+  emailLogin,
 } = require("../controllers/authLoginController");
 const { authMiddleware } = require("../middleware/auth");
 
@@ -25,6 +27,8 @@ const { authMiddleware } = require("../middleware/auth");
  * Response: { success: true, phone: "9876543210", otp: "1234" (dev only) }
  */
 router.post("/send-otp", sendOTP);
+router.post("/email-register", emailRegister);
+router.post("/email-login", emailLogin);
 
 /**
  * POST /api/auth-login/verify-otp
